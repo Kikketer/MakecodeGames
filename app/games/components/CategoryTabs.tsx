@@ -23,7 +23,7 @@ export function CategoryTabs({ categories, active }: { categories: Category[]; a
           <Link
             key={tab.slug}
             href={`/games?category=${tab.slug}`}
-            className={`border-2 border-makecode-white px-4 py-2 font-mono text-sm font-bold transition ${
+            className={`border-2 border-makecode-white px-4 py-2 font-sans text-sm font-bold transition ${
               isActive
                 ? "bg-makecode-red text-white hover:bg-makecode-pink"
                 : "bg-makecode-cyan text-makecode-black hover:bg-makecode-yellow"

@@ -23,8 +23,7 @@
   --color-makecode-dark: #5c406c;
   --color-makecode-tan: #e5cdc4;
   --color-makecode-brown: #91463d;
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: "Segoe UI", "Tahoma", "Geneva", "Verdana", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
 }
 
 body {

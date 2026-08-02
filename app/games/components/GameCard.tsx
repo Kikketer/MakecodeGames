@@ -14,7 +14,7 @@ function LikeButton({ likes }: { likes: number }) {
     <button
       type="submit"
       disabled={pending}
-      className="flex items-center gap-1 border-2 border-makecode-black bg-makecode-pink px-3 py-1 font-mono text-sm font-bold text-white hover:bg-makecode-red disabled:opacity-50"
+      className="flex items-center gap-1 border-2 border-makecode-black bg-makecode-pink px-3 py-1 font-sans text-sm font-bold text-white hover:bg-makecode-red disabled:opacity-50"
     >
       ♥ {likes}
     </button>
@@ -35,7 +35,7 @@ export function GameCard({ game, user }: { game: GameWithStats; user: User | nul
         onClick={() => startTransition(() => recordClick(game.id))}
       >
         {failed ? (
-          <div className="flex h-full items-center justify-center font-mono text-xs text-makecode-brown">No preview</div>
+          <div className="flex h-full items-center justify-center font-sans text-xs text-makecode-brown">No preview</div>
         ) : (
           <Image
             src={game.thumb_url}
@@ -48,10 +48,10 @@ export function GameCard({ game, user }: { game: GameWithStats; user: User | nul
         )}
       </a>
       <div className="mt-3 flex flex-col gap-1">
-        <h3 className="truncate font-mono text-base font-bold text-makecode-black" title={game.title}>
+        <h3 className="truncate font-sans text-base font-bold text-makecode-black" title={game.title}>
           {game.title}
         </h3>
-        <p className="font-mono text-sm text-makecode-brown">{game.author_username || "Anonymous"}</p>
+        <p className="font-sans text-sm text-makecode-brown">{game.author_username || "Anonymous"}</p>
         <div className="mt-2 flex items-center justify-between">
           {user ? (
             <form action={toggleLike.bind(null, game.id)}>
@@ -60,7 +60,7 @@ export function GameCard({ game, user }: { game: GameWithStats; user: User | nul
           ) : (
             <button
               onClick={() => signInWithMicrosoft()}
-              className="flex items-center gap-1 border-2 border-makecode-black bg-makecode-mauve px-3 py-1 font-mono text-sm font-bold text-white hover:bg-makecode-pink"
+              className="flex items-center gap-1 border-2 border-makecode-black bg-makecode-mauve px-3 py-1 font-sans text-sm font-bold text-white hover:bg-makecode-pink"
             >
               ♥ {game.likes}
             </button>
@@ -71,7 +71,7 @@ export function GameCard({ game, user }: { game: GameWithStats; user: User | nul
             rel="noopener noreferrer"
             aria-label={`Visit the forum post for ${game.title}`}
             title={`Visit the forum post for ${game.title}`}
-            className="font-mono text-sm font-bold text-makecode-blue hover:underline"
+            className="font-sans text-sm font-bold text-makecode-blue hover:underline"
           >
             Forum ({game.replies})
           </a>

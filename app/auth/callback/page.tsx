@@ -31,7 +31,7 @@ export default function AuthCallbackPage() {
   return (
     <main className="flex min-h-screen flex-col items-center justify-center bg-makecode-dark p-6 text-center">
       <div className="border-4 border-makecode-yellow bg-makecode-blue p-6 shadow-[4px_4px_0_#000000]">
-        <p className="font-mono text-2xl font-bold text-white">Signing you in...</p>
+        <p className="font-sans text-2xl font-bold text-white">Signing you in...</p>
       </div>
     </main>
   );

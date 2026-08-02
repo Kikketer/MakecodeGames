@@ -15,13 +15,13 @@ export function AuthButton({ user }: { user: User | null }) {
         {avatar ? (
           <img src={avatar} alt="" className="h-8 w-8 border-2 border-makecode-white object-cover" />
         ) : (
-          <div className="flex h-8 w-8 items-center justify-center border-2 border-makecode-white bg-makecode-pink font-mono font-bold text-white">
+          <div className="flex h-8 w-8 items-center justify-center border-2 border-makecode-white bg-makecode-pink font-sans font-bold text-white">
             {initial}
           </div>
         )}
         <button
           type="submit"
-          className="border-2 border-makecode-black bg-makecode-red px-3 py-1 font-mono text-sm font-bold text-white hover:bg-makecode-pink"
+          className="border-2 border-makecode-black bg-makecode-red px-3 py-1 font-sans text-sm font-bold text-white hover:bg-makecode-pink"
         >
           Sign out
         </button>
@@ -32,7 +32,7 @@ export function AuthButton({ user }: { user: User | null }) {
   return (
     <button
       onClick={() => signInWithMicrosoft()}
-      className="border-2 border-makecode-black bg-makecode-blue px-4 py-2 font-mono font-bold text-white hover:bg-makecode-cyan"
+      className="border-2 border-makecode-black bg-makecode-blue px-4 py-2 font-sans font-bold text-white hover:bg-makecode-cyan"
     >
       Sign in with Microsoft
     </button>

@@ -14,7 +14,7 @@ function LikeButton({ likes }: { likes: number }) {
     <button
       type="submit"
       disabled={pending}
-      className="flex items-center gap-1 border-2 border-makecode-black bg-makecode-pink px-3 py-1 font-mono text-sm font-bold text-white hover:bg-makecode-red disabled:opacity-50"
+      className="flex items-center gap-1 border-2 border-makecode-black bg-makecode-pink px-3 py-1 font-sans text-sm font-bold text-white hover:bg-makecode-red disabled:opacity-50"
     >
       ♥ {likes}
     </button>
@@ -29,10 +29,10 @@ export function GameJamCard({ game, user }: { game: GameWithStats; user: User | 
     <article className="w-full border-4 border-makecode-yellow bg-white p-4 shadow-[4px_4px_0_#000000]">
       <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
-          <h3 className="truncate font-mono text-xl font-bold text-makecode-black" title={game.title}>
+          <h3 className="truncate font-sans text-xl font-bold text-makecode-black" title={game.title}>
             {game.title}
           </h3>
-          <p className="font-mono text-sm text-makecode-brown">{game.author_username || "Anonymous"}</p>
+          <p className="font-sans text-sm text-makecode-brown">{game.author_username || "Anonymous"}</p>
         </div>
         <div className="flex items-center gap-3">
           {user ? (
@@ -42,7 +42,7 @@ export function GameJamCard({ game, user }: { game: GameWithStats; user: User | 
           ) : (
             <button
               onClick={() => signInWithMicrosoft()}
-              className="flex items-center gap-1 border-2 border-makecode-black bg-makecode-mauve px-3 py-1 font-mono text-sm font-bold text-white hover:bg-makecode-pink"
+              className="flex items-center gap-1 border-2 border-makecode-black bg-makecode-mauve px-3 py-1 font-sans text-sm font-bold text-white hover:bg-makecode-pink"
             >
               ♥ {game.likes}
             </button>
@@ -53,7 +53,7 @@ export function GameJamCard({ game, user }: { game: GameWithStats; user: User | 
             rel="noopener noreferrer"
             aria-label={`Visit the forum post for ${game.title}`}
             title={`Visit the forum post for ${game.title}`}
-            className="font-mono text-sm font-bold text-makecode-blue hover:underline"
+            className="font-sans text-sm font-bold text-makecode-blue hover:underline"
           >
             Forum ({game.replies})
           </a>
@@ -70,7 +70,7 @@ export function GameJamCard({ game, user }: { game: GameWithStats; user: User | 
           aria-label={`Play ${game.title}`}
         >
           {failed ? (
-            <div className="flex h-full items-center justify-center font-mono text-xs text-makecode-brown">No preview</div>
+            <div className="flex h-full items-center justify-center font-sans text-xs text-makecode-brown">No preview</div>
           ) : (
             <Image
               src={game.thumb_url}
@@ -89,7 +89,7 @@ export function GameJamCard({ game, user }: { game: GameWithStats; user: User | 
             dangerouslySetInnerHTML={{ __html: game.post_cooked }}
           />
         ) : (
-          <p className="flex-1 font-mono text-sm text-makecode-brown">No forum description available.</p>
+          <p className="flex-1 font-sans text-sm text-makecode-brown">No forum description available.</p>
         )}
       </div>
     </article>
