@@ -20,12 +20,14 @@ export type GameWithStats = {
   likes: number;
   clicks: number;
   forum_url: string;
+  replies: number;
+  views: number;
 };
 
 type CategoryRow = { id: number; name: string; slug: string; parent_category_id?: number | null };
 type JamRow = { id: string; title: string };
 type StatsRow = { game_id: string; likes: number; clicks: number };
-type PostRow = { game_id: string; forum_url: string };
+type PostRow = { game_id: string; forum_url: string; reply_count: number; view_count: number };
 
 type ListParams = {
   category?: string;
@@ -79,7 +81,7 @@ export async function listGames({ category, jam, sort, limit = 10 }: ListParams)
   const [{ data: games }, { data: stats }, { data: posts }] = await Promise.all([
     supabaseServer.from("games").select("*").in("id", gameIds),
     supabaseServer.from("game_stats").select("*").in("game_id", gameIds),
-    supabaseServer.from("game_forum_posts").select("game_id,forum_url,seen_at").in("game_id", gameIds),
+    supabaseServer.from("game_forum_posts").select("game_id,forum_url,reply_count,view_count").in("game_id", gameIds),
   ]);
 
   const statsMap = new Map(
@@ -89,19 +91,28 @@ export async function listGames({ category, jam, sort, limit = 10 }: ListParams)
     ])
   );
 
-  const forumMap = new Map<string, string>();
+  const forumMap = new Map<string, { url: string; replies: number; views: number }>();
   ((posts || []) as unknown as PostRow[]).forEach((p) => {
-    if (!forumMap.has(p.game_id)) forumMap.set(p.game_id, p.forum_url);
+    if (!forumMap.has(p.game_id)) {
+      forumMap.set(p.game_id, {
+        url: p.forum_url,
+        replies: p.reply_count || 0,
+        views: p.view_count || 0,
+      });
+    }
   });
 
   const gameRows = (games || []) as unknown as GameWithStats[];
   const merged = gameRows.map((g) => {
     const s = statsMap.get(g.id) || { likes: 0, clicks: 0 };
+    const p = forumMap.get(g.id) || { url: "", replies: 0, views: 0 };
     return {
       ...g,
       likes: s.likes,
       clicks: s.clicks,
-      forum_url: forumMap.get(g.id) || "",
+      forum_url: p.url,
+      replies: p.replies,
+      views: p.views,
     };
   });
 

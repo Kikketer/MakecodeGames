@@ -15,6 +15,7 @@ type DiscourseTopic = {
   title: string;
   category_id: number;
   posts_count: number;
+  views: number;
   created_at?: string;
 };
 
@@ -145,7 +146,9 @@ async function upsertForumPost(
   topicSlug: string,
   categoryId: number,
   categoryName: string,
-  jamId?: string
+  jamId: string | undefined,
+  replyCount: number,
+  viewCount: number
 ) {
   const forumUrl = `${FORUM_BASE}/t/${topicSlug}/${topicId}/${post.post_number}`;
   const { error } = await supabaseServer.from("game_forum_posts").upsert(
@@ -158,6 +161,8 @@ async function upsertForumPost(
       forum_category_name: categoryName,
       jam_id: jamId || null,
       seen_at: new Date().toISOString(),
+      reply_count: Math.max(0, replyCount - 1),
+      view_count: viewCount,
     },
     { onConflict: "game_id, forum_topic_id, forum_post_id" }
   );
@@ -197,14 +202,22 @@ async function ingestPost(
 
   const gameId = await upsertGame(shareUrl, meta, { user_id: post.user_id, username: post.username });
   const categoryName = categoryMap.get(topic.category_id) || "";
-  await upsertForumPost(gameId, post, topic.id, `t-${topic.id}`, topic.category_id, categoryName, jamId);
+  await upsertForumPost(
+    gameId,
+    post,
+    topic.id,
+    `t-${topic.id}`,
+    topic.category_id,
+    categoryName,
+    jamId,
+    topic.posts_count || 0,
+    topic.views || 0
+  );
   return gameId;
 }
 
 export async function ingestJamTopic(topicId: number): Promise<{ games: number; errors: string[] }> {
-  const topic = await fetchJson<{ title: string; category_id: number; created_at: string }>(
-    `${FORUM_BASE}/t/${topicId}.json`
-  );
+  const topic = await fetchJson<DiscourseTopic>(`${FORUM_BASE}/t/${topicId}.json`);
   if (!topic) return { games: 0, errors: [`topic ${topicId} not found`] };
 
   const posts = await fetchJson<{ post_stream: { posts: DiscoursePost[] } }>(
@@ -213,7 +226,8 @@ export async function ingestJamTopic(topicId: number): Promise<{ games: number; 
   if (!posts) return { games: 0, errors: [`posts for ${topicId} not found`] };
 
   const categoryMap = await getCategories();
-  const jam = await upsertJam({ ...topic, id: topicId, posts_count: posts.post_stream.posts.length });
+  const jamTopic: DiscourseTopic = { ...topic, id: topicId };
+  const jam = await upsertJam(jamTopic);
   const errors: string[] = [];
   let games = 0;
 
@@ -222,7 +236,7 @@ export async function ingestJamTopic(topicId: number): Promise<{ games: number; 
     const urls = extractShareUrls(post.cooked);
     for (const url of urls) {
       try {
-        const gameId = await ingestPost(url, post, { ...topic, id: topicId, posts_count: 0 }, categoryMap, jam);
+        const gameId = await ingestPost(url, post, jamTopic, categoryMap, jam);
         if (gameId) games++;
       } catch (e) {
         errors.push(String(e));

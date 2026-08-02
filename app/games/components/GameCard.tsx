@@ -69,9 +69,11 @@ export function GameCard({ game, user }: { game: GameWithStats; user: User | nul
             href={game.forum_url || `https://forum.makecode.com/t/${game.id}`}
             target="_blank"
             rel="noopener noreferrer"
+            aria-label={`Visit the forum post for ${game.title}`}
+            title={`Visit the forum post for ${game.title}`}
             className="font-mono text-sm font-bold text-makecode-blue hover:underline"
           >
-            Forum
+            Forum ({game.replies})
           </a>
         </div>
       </div>
