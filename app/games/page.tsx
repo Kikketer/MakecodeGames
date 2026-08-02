@@ -24,21 +24,30 @@ export default async function GamesPage({
   ]);
 
   return (
-    <main className="flex min-h-screen flex-col gap-6 bg-makecode-dark px-6 py-6">
-      <header className="flex flex-wrap items-center justify-between gap-4 border-b-4 border-makecode-white pb-4">
-        <h1 className="font-mono text-3xl font-bold text-makecode-yellow">MakeCode Games Library</h1>
-        <AuthButton user={user} />
+    <>
+      <header className="bg-makecode-blue border-b-4 border-makecode-white px-6 py-4">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h1 className="font-mono text-3xl font-bold text-white">MakeCode Games Library</h1>
+            <p className="mt-1 font-mono text-sm text-makecode-tan">
+              This is not affiliated with Microsoft, this is a fan-made site
+            </p>
+          </div>
+          <AuthButton user={user} />
+        </div>
       </header>
 
-      <CategoryTabs categories={categories} active={activeCategory} />
+      <main className="flex flex-1 flex-col gap-6 bg-makecode-dark px-6 py-6">
+        <CategoryTabs categories={categories} active={activeCategory} />
 
-      {activeCategory === "game-jams" && <JamSelector jams={jams} activeJam={activeJam} />}
+        {activeCategory === "game-jams" && <JamSelector jams={jams} activeJam={activeJam} />}
 
-      <div className="flex flex-col gap-8">
-        <GameRow title="Hot" games={hot} user={user} />
-        <GameRow title="Most Liked" games={liked} user={user} />
-        <GameRow title="Newest" games={newest} user={user} />
-      </div>
-    </main>
+        <div className="flex flex-col gap-8">
+          <GameRow title="Hot" games={hot} user={user} />
+          <GameRow title="Most Liked" games={liked} user={user} />
+          <GameRow title="Newest" games={newest} user={user} />
+        </div>
+      </main>
+    </>
   );
 }
