@@ -24,9 +24,9 @@ export default async function GamesPage({
   ]);
 
   return (
-    <main className="flex min-h-screen flex-col gap-6 bg-zinc-50 px-6 py-6 dark:bg-zinc-950">
-      <header className="flex flex-wrap items-center justify-between gap-4">
-        <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">MakeCode Games Library</h1>
+    <main className="flex min-h-screen flex-col gap-6 bg-makecode-dark px-6 py-6">
+      <header className="flex flex-wrap items-center justify-between gap-4 border-b-4 border-makecode-white pb-4">
+        <h1 className="font-mono text-3xl font-bold text-makecode-yellow">MakeCode Games Library</h1>
         <AuthButton user={user} />
       </header>
 

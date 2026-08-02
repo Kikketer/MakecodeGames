@@ -14,7 +14,7 @@ function LikeButton({ likes }: { likes: number }) {
     <button
       type="submit"
       disabled={pending}
-      className="flex items-center gap-1 rounded-full bg-zinc-100 px-3 py-1 text-sm font-medium text-zinc-800 hover:bg-zinc-200 disabled:opacity-50 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700"
+      className="flex items-center gap-1 border-2 border-makecode-black bg-makecode-pink px-3 py-1 font-mono text-sm font-bold text-white hover:bg-makecode-red disabled:opacity-50"
     >
       ♥ {likes}
     </button>
@@ -26,16 +26,16 @@ export function GameCard({ game, user }: { game: GameWithStats; user: User | nul
   const [, startTransition] = useTransition();
 
   return (
-    <div className="w-64 shrink-0 rounded-xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+    <div className="w-64 shrink-0 border-4 border-makecode-yellow bg-white p-2 shadow-[4px_4px_0_#000000]">
       <a
         href={game.game_url}
         target="_blank"
         rel="noopener noreferrer"
-        className="relative block aspect-[4/3] overflow-hidden rounded-lg bg-zinc-100"
+        className="relative block aspect-[4/3] overflow-hidden bg-makecode-tan"
         onClick={() => startTransition(() => recordClick(game.id))}
       >
         {failed ? (
-          <div className="flex h-full items-center justify-center text-xs text-zinc-400">No preview</div>
+          <div className="flex h-full items-center justify-center font-mono text-xs text-makecode-brown">No preview</div>
         ) : (
           <Image
             src={game.thumb_url}
@@ -48,10 +48,10 @@ export function GameCard({ game, user }: { game: GameWithStats; user: User | nul
         )}
       </a>
       <div className="mt-3 flex flex-col gap-1">
-        <h3 className="truncate text-base font-semibold text-zinc-900 dark:text-zinc-50" title={game.title}>
+        <h3 className="truncate font-mono text-base font-bold text-makecode-black" title={game.title}>
           {game.title}
         </h3>
-        <p className="text-sm text-zinc-500 dark:text-zinc-400">{game.author_username || "Anonymous"}</p>
+        <p className="font-mono text-sm text-makecode-brown">{game.author_username || "Anonymous"}</p>
         <div className="mt-2 flex items-center justify-between">
           {user ? (
             <form action={toggleLike.bind(null, game.id)}>
@@ -60,7 +60,7 @@ export function GameCard({ game, user }: { game: GameWithStats; user: User | nul
           ) : (
             <button
               onClick={() => signInWithMicrosoft()}
-              className="flex items-center gap-1 rounded-full bg-zinc-100 px-3 py-1 text-sm font-medium text-zinc-800 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700"
+              className="flex items-center gap-1 border-2 border-makecode-black bg-makecode-mauve px-3 py-1 font-mono text-sm font-bold text-white hover:bg-makecode-pink"
             >
               ♥ {game.likes}
             </button>
@@ -69,7 +69,7 @@ export function GameCard({ game, user }: { game: GameWithStats; user: User | nul
             href={game.forum_url || `https://forum.makecode.com/t/${game.id}`}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-sm text-blue-600 hover:underline dark:text-blue-400"
+            className="font-mono text-sm font-bold text-makecode-blue hover:underline"
           >
             Forum
           </a>

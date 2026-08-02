@@ -27,7 +27,12 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col bg-background text-foreground font-sans">
+        <div className="bg-makecode-red px-4 py-1 text-center text-xs font-bold text-white">
+          This is not affiliated with Microsoft, this is a fan-made site
+        </div>
+        {children}
+      </body>
     </html>
   );
 }

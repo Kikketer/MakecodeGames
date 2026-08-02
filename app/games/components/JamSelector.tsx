@@ -13,10 +13,10 @@ export function JamSelector({ jams, activeJam }: { jams: Jam[]; activeJam?: stri
           <Link
             key={jam.id}
             href={`/games?category=game-jams&jam=${jam.id}`}
-            className={`rounded-full px-3 py-1 text-sm transition ${
+            className={`border-2 border-makecode-white px-3 py-1 font-mono text-sm font-bold transition ${
               isActive
-                ? "bg-blue-600 text-white"
-                : "bg-zinc-50 text-zinc-700 hover:bg-zinc-100 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                ? "bg-makecode-teal text-white hover:bg-makecode-green"
+                : "bg-makecode-yellow text-makecode-black hover:bg-makecode-green"
             }`}
           >
             {jam.title}

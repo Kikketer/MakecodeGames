@@ -6,12 +6,22 @@ import { signOut } from "@/app/games/actions";
 
 export function AuthButton({ user }: { user: User | null }) {
   if (user) {
+    const meta = user.user_metadata as { picture?: string; avatar_url?: string } | undefined;
+    const avatar = meta?.picture || meta?.avatar_url;
+    const initial = (user.email?.[0] || "U").toUpperCase();
+
     return (
       <form action={signOut} className="flex items-center gap-2">
-        <span className="text-sm text-zinc-600 dark:text-zinc-300">{user.email}</span>
+        {avatar ? (
+          <img src={avatar} alt="" className="h-8 w-8 border-2 border-makecode-white object-cover" />
+        ) : (
+          <div className="flex h-8 w-8 items-center justify-center border-2 border-makecode-white bg-makecode-pink font-mono font-bold text-white">
+            {initial}
+          </div>
+        )}
         <button
           type="submit"
-          className="rounded-full bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200"
+          className="border-2 border-makecode-black bg-makecode-red px-3 py-1 font-mono text-sm font-bold text-white hover:bg-makecode-pink"
         >
           Sign out
         </button>
@@ -22,7 +32,7 @@ export function AuthButton({ user }: { user: User | null }) {
   return (
     <button
       onClick={() => signInWithMicrosoft()}
-      className="rounded-full bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+      className="border-2 border-makecode-black bg-makecode-blue px-4 py-2 font-mono font-bold text-white hover:bg-makecode-cyan"
     >
       Sign in with Microsoft
     </button>

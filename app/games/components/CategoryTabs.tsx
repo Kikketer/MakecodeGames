@@ -16,17 +16,17 @@ export function CategoryTabs({ categories, active }: { categories: Category[]; a
   ];
 
   return (
-    <nav className="flex flex-wrap gap-2 border-b border-zinc-200 pb-2 dark:border-zinc-800">
+    <nav className="flex flex-wrap gap-2 border-b-4 border-makecode-white pb-2">
       {tabs.map((tab) => {
         const isActive = active === tab.slug;
         return (
           <Link
             key={tab.slug}
             href={`/games?category=${tab.slug}`}
-            className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+            className={`border-2 border-makecode-white px-4 py-2 font-mono text-sm font-bold transition ${
               isActive
-                ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
-                : "bg-zinc-100 text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                ? "bg-makecode-red text-white hover:bg-makecode-pink"
+                : "bg-makecode-cyan text-makecode-black hover:bg-makecode-yellow"
             }`}
           >
             {tab.label}

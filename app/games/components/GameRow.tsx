@@ -7,7 +7,7 @@ export function GameRow({ title, games, user }: { title: string; games: GameWith
 
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">{title}</h2>
+      <h2 className="font-mono text-2xl font-bold text-makecode-yellow">{title}</h2>
       <div className="flex gap-4 overflow-x-auto pb-2">
         {games.map((game) => (
           <GameCard key={game.id} game={game} user={user} />
