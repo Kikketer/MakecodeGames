@@ -28,6 +28,8 @@ type DiscoursePost = {
   created_at?: string;
 };
 
+type TopicPage = DiscourseTopic & { post_stream: { posts: DiscoursePost[] } };
+
 type MakeCodeMeta = {
   id: string;
   shortid?: string;
@@ -217,27 +219,39 @@ async function ingestPost(
   return gameId;
 }
 
+async function fetchAllTopicPosts(topicId: number): Promise<{ topic: DiscourseTopic | null; posts: DiscoursePost[] }> {
+  const first = await fetchJson<TopicPage>(`${FORUM_BASE}/t/${topicId}.json`);
+  if (!first) return { topic: null, posts: [] };
+
+  const posts: DiscoursePost[] = [...first.post_stream.posts];
+  const perPage = first.post_stream.posts.length || 20;
+  const pages = Math.ceil(first.posts_count / perPage);
+
+  for (let page = 2; page <= pages; page++) {
+    const next = await fetchJson<TopicPage>(`${FORUM_BASE}/t/${topicId}.json?page=${page}`);
+    if (!next) break;
+    posts.push(...next.post_stream.posts);
+  }
+
+  const topic: DiscourseTopic = { ...first, id: topicId };
+  return { topic, posts };
+}
+
 export async function ingestJamTopic(topicId: number): Promise<{ games: number; errors: string[] }> {
-  const topic = await fetchJson<DiscourseTopic>(`${FORUM_BASE}/t/${topicId}.json`);
+  const { topic, posts } = await fetchAllTopicPosts(topicId);
   if (!topic) return { games: 0, errors: [`topic ${topicId} not found`] };
 
-  const posts = await fetchJson<{ post_stream: { posts: DiscoursePost[] } }>(
-    `${FORUM_BASE}/t/${topicId}/posts.json`
-  );
-  if (!posts) return { games: 0, errors: [`posts for ${topicId} not found`] };
-
   const categoryMap = await getCategories();
-  const jamTopic: DiscourseTopic = { ...topic, id: topicId };
-  const jam = await upsertJam(jamTopic);
+  const jam = await upsertJam(topic);
   const errors: string[] = [];
   let games = 0;
 
-  for (const post of posts.post_stream.posts) {
+  for (const post of posts) {
     if (post.post_number === 1) continue;
     const urls = extractShareUrls(post.cooked);
     for (const url of urls) {
       try {
-        const gameId = await ingestPost(url, post, jamTopic, categoryMap, jam);
+        const gameId = await ingestPost(url, post, topic, categoryMap, jam);
         if (gameId) games++;
       } catch (e) {
         errors.push(String(e));
@@ -259,16 +273,14 @@ export async function ingestCategoryTopics(categoryId: number, limit = 10): Prom
   let games = 0;
 
   for (const topic of category.topic_list.topics.slice(0, limit)) {
-    const posts = await fetchJson<{ post_stream: { posts: DiscoursePost[] } }>(
-      `${FORUM_BASE}/t/${topic.id}/posts.json`
-    );
-    if (!posts) continue;
+    const { topic: fullTopic, posts } = await fetchAllTopicPosts(topic.id);
+    if (!fullTopic) continue;
 
-    for (const post of posts.post_stream.posts) {
+    for (const post of posts) {
       const urls = extractShareUrls(post.cooked);
       for (const url of urls) {
         try {
-          const gameId = await ingestPost(url, post, topic, categoryMap);
+          const gameId = await ingestPost(url, post, fullTopic, categoryMap);
           if (gameId) games++;
         } catch (e) {
           errors.push(String(e));
