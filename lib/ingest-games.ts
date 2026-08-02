@@ -197,8 +197,13 @@ async function ingestPost(
   post: DiscoursePost,
   topic: DiscourseTopic,
   categoryMap: CategoryMap,
-  jamId?: string
+  jamId?: string,
+  lastIngestAt?: Date
 ): Promise<string | null> {
+  if (lastIngestAt && post.created_at && new Date(post.created_at) < lastIngestAt) {
+    return null;
+  }
+
   const urlId = shareUrlToId(shareUrl);
   const meta = await normalizeMakeCode(urlId);
   if (!meta) return null;
@@ -219,7 +224,10 @@ async function ingestPost(
   return gameId;
 }
 
-async function fetchAllTopicPosts(topicId: number): Promise<{ topic: DiscourseTopic | null; posts: DiscoursePost[] }> {
+async function fetchAllTopicPosts(
+  topicId: number,
+  lastIngestAt?: Date
+): Promise<{ topic: DiscourseTopic | null; posts: DiscoursePost[] }> {
   const first = await fetchJson<TopicPage>(`${FORUM_BASE}/t/${topicId}.json`);
   if (!first) return { topic: null, posts: [] };
 
@@ -230,15 +238,24 @@ async function fetchAllTopicPosts(topicId: number): Promise<{ topic: DiscourseTo
   for (let page = 2; page <= pages; page++) {
     const next = await fetchJson<TopicPage>(`${FORUM_BASE}/t/${topicId}.json?page=${page}`);
     if (!next) break;
+
     posts.push(...next.post_stream.posts);
+
+    const oldest = next.post_stream.posts[next.post_stream.posts.length - 1];
+    if (lastIngestAt && oldest?.created_at && new Date(oldest.created_at) < lastIngestAt) {
+      break;
+    }
   }
 
   const topic: DiscourseTopic = { ...first, id: topicId };
   return { topic, posts };
 }
 
-export async function ingestJamTopic(topicId: number): Promise<{ games: number; errors: string[] }> {
-  const { topic, posts } = await fetchAllTopicPosts(topicId);
+export async function ingestJamTopic(
+  topicId: number,
+  lastIngestAt?: Date
+): Promise<{ games: number; errors: string[] }> {
+  const { topic, posts } = await fetchAllTopicPosts(topicId, lastIngestAt);
   if (!topic) return { games: 0, errors: [`topic ${topicId} not found`] };
 
   const categoryMap = await getCategories();
@@ -251,7 +268,7 @@ export async function ingestJamTopic(topicId: number): Promise<{ games: number; 
     const urls = extractShareUrls(post.cooked);
     for (const url of urls) {
       try {
-        const gameId = await ingestPost(url, post, topic, categoryMap, jam);
+        const gameId = await ingestPost(url, post, topic, categoryMap, jam, lastIngestAt);
         if (gameId) games++;
       } catch (e) {
         errors.push(String(e));
@@ -262,7 +279,11 @@ export async function ingestJamTopic(topicId: number): Promise<{ games: number; 
   return { games, errors };
 }
 
-export async function ingestCategoryTopics(categoryId: number, limit = 10): Promise<{ games: number; errors: string[] }> {
+export async function ingestCategoryTopics(
+  categoryId: number,
+  limit = 10,
+  lastIngestAt?: Date
+): Promise<{ games: number; errors: string[] }> {
   const category = await fetchJson<{ topic_list: { topics: DiscourseTopic[] } }>(
     `${FORUM_BASE}/c/${categoryId}.json`
   );
@@ -273,14 +294,14 @@ export async function ingestCategoryTopics(categoryId: number, limit = 10): Prom
   let games = 0;
 
   for (const topic of category.topic_list.topics.slice(0, limit)) {
-    const { topic: fullTopic, posts } = await fetchAllTopicPosts(topic.id);
+    const { topic: fullTopic, posts } = await fetchAllTopicPosts(topic.id, lastIngestAt);
     if (!fullTopic) continue;
 
     for (const post of posts) {
       const urls = extractShareUrls(post.cooked);
       for (const url of urls) {
         try {
-          const gameId = await ingestPost(url, post, fullTopic, categoryMap);
+          const gameId = await ingestPost(url, post, fullTopic, categoryMap, undefined, lastIngestAt);
           if (gameId) games++;
         } catch (e) {
           errors.push(String(e));
@@ -294,18 +315,35 @@ export async function ingestCategoryTopics(categoryId: number, limit = 10): Prom
 
 export async function ingestOnce(): Promise<IngestResult> {
   const result: IngestResult = { jams: 0, games: 0, posts: 0, errors: [] };
+  const startedAt = new Date().toISOString();
 
-  const jam = await ingestJamTopic(44801);
+  const { data: lastLog } = await supabaseServer
+    .from("ingest_log")
+    .select("finished_at")
+    .order("finished_at", { ascending: false })
+    .limit(1)
+    .single();
+  const lastIngestAt = lastLog?.finished_at ? new Date(lastLog.finished_at as string) : undefined;
+
+  const jam = await ingestJamTopic(44801, lastIngestAt);
   result.jams = 1;
   result.games += jam.games;
   result.errors.push(...jam.errors);
 
-  const cat = await ingestCategoryTopics(5, 10);
+  const cat = await ingestCategoryTopics(5, 10, lastIngestAt);
   result.games += cat.games;
   result.errors.push(...cat.errors);
 
   const { count } = await supabaseServer.from("game_forum_posts").select("*", { count: "exact", head: true });
   result.posts = count || 0;
+
+  await supabaseServer.from("ingest_log").insert({
+    started_at: startedAt,
+    finished_at: new Date().toISOString(),
+    games: result.games,
+    posts: result.posts,
+    errors: result.errors,
+  });
 
   return result;
 }
