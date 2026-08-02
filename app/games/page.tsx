@@ -30,7 +30,17 @@ export default async function GamesPage({
           <div>
             <h1 className="font-mono text-3xl font-bold text-white">MakeCode Games Library</h1>
             <p className="mt-1 font-mono text-sm text-makecode-tan">
-              This is not affiliated with Microsoft, this is a fan-made site
+              This is not affiliated with Microsoft, this is a fan-made site.{" "}
+              Visit{" "}
+              <a
+                href="https://arcade.makecode.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-bold text-white hover:underline"
+              >
+                MakeCode Arcade
+              </a>{" "}
+              to make a game!
             </p>
           </div>
           <AuthButton user={user} />
