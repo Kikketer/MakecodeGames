@@ -11,7 +11,7 @@ export function CategoryTabs({ categories, active }: { categories: Category[]; a
   const tabs = [
     ...BUILT_IN,
     ...categories
-      .filter((c) => c.parent_category_id === 5 && !["all", "game-jams"].includes(c.slug))
+      .filter((c) => c.parent_category_id === 5 && c.slug === "show-tell")
       .map((c) => ({ label: c.name, slug: c.slug })),
   ];
 

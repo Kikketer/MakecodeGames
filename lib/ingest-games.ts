@@ -163,6 +163,7 @@ async function upsertForumPost(
       seen_at: new Date().toISOString(),
       reply_count: Math.max(0, replyCount - 1),
       view_count: viewCount,
+      post_cooked: post.cooked,
     },
     { onConflict: "game_id, forum_topic_id, forum_post_id" }
   );
