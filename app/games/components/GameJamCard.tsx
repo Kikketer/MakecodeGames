@@ -21,16 +21,20 @@ export function GameJamCard({ game }: { game: GameWithStats }) {
         </div>
         <div className="flex items-center gap-3">
           <LikeControl game={game} />
-          <a
-            href={game.forum_url || `https://forum.makecode.com/t/${game.id}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label={`Visit the forum post for ${game.title}`}
-            title={`Visit the forum post for ${game.title}`}
-            className="font-sans text-sm font-bold text-makecode-blue hover:underline"
-          >
-            Forum ({game.replies})
-          </a>
+          {game.forum_url ? (
+            <a
+              href={game.forum_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`Visit the forum post for ${game.title}`}
+              title={`Visit the forum post for ${game.title}`}
+              className="font-sans text-sm font-bold text-makecode-blue hover:underline"
+            >
+              Forum ({game.replies})
+            </a>
+          ) : (
+            <span className="font-sans text-sm font-bold text-makecode-brown">Forum ({game.replies})</span>
+          )}
         </div>
       </div>
 
