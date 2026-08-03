@@ -23,12 +23,14 @@ export type GameWithStats = {
   replies: number;
   views: number;
   post_cooked: string | null;
+  likedByMe: boolean;
 };
 
 type CategoryRow = { id: number; name: string; slug: string; parent_category_id?: number | null };
 type JamRow = { id: string; title: string };
 type StatsRow = { game_id: string; likes: number; clicks: number };
 type PostRow = { game_id: string; forum_url: string; reply_count: number; view_count: number; post_cooked: string | null };
+type LikeRow = { game_id: string };
 
 type ListParams = {
   category?: string;
@@ -79,6 +81,8 @@ export async function listGames({ category, jam, sort, limit = 10 }: ListParams)
 
   if (gameIds.length === 0) return [];
 
+  const user = await getUser();
+
   const [{ data: games }, { data: stats }, { data: posts }] = await Promise.all([
     supabaseServer.from("games").select("*").in("id", gameIds),
     supabaseServer.from("game_stats").select("*").in("game_id", gameIds),
@@ -104,6 +108,16 @@ export async function listGames({ category, jam, sort, limit = 10 }: ListParams)
     }
   });
 
+  const likedByMe = new Set<string>();
+  if (user) {
+    const { data } = await supabaseServer
+      .from("game_likes")
+      .select("game_id")
+      .in("game_id", gameIds)
+      .eq("user_id", user.id);
+    ((data || []) as unknown as LikeRow[]).forEach((l) => likedByMe.add(l.game_id));
+  }
+
   const gameRows = (games || []) as unknown as GameWithStats[];
   const merged = gameRows.map((g) => {
     const s = statsMap.get(g.id) || { likes: 0, clicks: 0 };
@@ -116,6 +130,7 @@ export async function listGames({ category, jam, sort, limit = 10 }: ListParams)
       replies: p.replies,
       views: p.views,
       post_cooked: p.post_cooked,
+      likedByMe: likedByMe.has(g.id),
     };
   });
 
@@ -136,22 +151,13 @@ export async function listGames({ category, jam, sort, limit = 10 }: ListParams)
   return merged.slice(0, limit);
 }
 
-export async function toggleLike(gameId: string) {
+export async function addLike(gameId: string) {
   const user = await getUser();
   if (!user) throw new Error("Unauthorized");
 
-  const { data: existing } = await supabaseServer
+  await supabaseServer
     .from("game_likes")
-    .select("game_id")
-    .eq("game_id", gameId)
-    .eq("user_id", user.id)
-    .limit(1);
-
-  if (existing && existing.length > 0) {
-    await supabaseServer.from("game_likes").delete().eq("game_id", gameId).eq("user_id", user.id);
-  } else {
-    await supabaseServer.from("game_likes").insert({ game_id: gameId, user_id: user.id });
-  }
+    .upsert({ game_id: gameId, user_id: user.id }, { onConflict: "game_id,user_id", ignoreDuplicates: true });
 
   revalidatePath("/games");
 }
