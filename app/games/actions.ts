@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { supabaseServer } from "@/lib/supabase-server";
 import { getUser } from "@/lib/auth";
+import { refreshGameReactions } from "@/lib/ingest-games";
 
 export type GameWithStats = {
   id: string;
@@ -23,14 +24,19 @@ export type GameWithStats = {
   replies: number;
   views: number;
   post_cooked: string | null;
-  likedByMe: boolean;
 };
 
 type CategoryRow = { id: number; name: string; slug: string; parent_category_id?: number | null };
 type JamRow = { id: string; title: string };
-type StatsRow = { game_id: string; likes: number; clicks: number };
-type PostRow = { game_id: string; forum_url: string; reply_count: number; view_count: number; post_cooked: string | null };
-type LikeRow = { game_id: string };
+type StatsRow = { game_id: string; clicks: number };
+type PostRow = {
+  game_id: string;
+  forum_url: string;
+  reply_count: number;
+  view_count: number;
+  post_cooked: string | null;
+  reaction_count: number;
+};
 
 type ListParams = {
   category?: string;
@@ -39,43 +45,39 @@ type ListParams = {
   limit?: number;
 };
 
-function mergeGameData(
-  games: GameWithStats[],
-  stats: StatsRow[],
-  posts: PostRow[],
-  likedByMe: Set<string>
-): GameWithStats[] {
-  const statsMap = new Map(
-    stats.map((s) => [
-      s.game_id,
-      { likes: s.likes || 0, clicks: s.clicks || 0 },
-    ])
-  );
+function mergeGameData(games: GameWithStats[], stats: StatsRow[], posts: PostRow[]): GameWithStats[] {
+  const statsMap = new Map(stats.map((s) => [s.game_id, { clicks: s.clicks || 0 }]));
 
-  const forumMap = new Map<string, { url: string; replies: number; views: number; post_cooked: string | null }>();
+  const forumMap = new Map<
+    string,
+    { url: string; replies: number; views: number; post_cooked: string | null; likes: number }
+  >();
   posts.forEach((p) => {
-    if (!forumMap.has(p.game_id)) {
+    const existing = forumMap.get(p.game_id);
+    if (!existing) {
       forumMap.set(p.game_id, {
         url: p.forum_url,
         replies: p.reply_count || 0,
         views: p.view_count || 0,
         post_cooked: p.post_cooked,
+        likes: p.reaction_count || 0,
       });
+    } else {
+      existing.likes += p.reaction_count || 0;
     }
   });
 
   return games.map((g) => {
-    const s = statsMap.get(g.id) || { likes: 0, clicks: 0 };
-    const p = forumMap.get(g.id) || { url: "", replies: 0, views: 0, post_cooked: null };
+    const s = statsMap.get(g.id) || { clicks: 0 };
+    const p = forumMap.get(g.id) || { url: "", replies: 0, views: 0, post_cooked: null, likes: 0 };
     return {
       ...g,
-      likes: s.likes,
+      likes: p.likes,
       clicks: s.clicks,
       forum_url: p.url,
       replies: p.replies,
       views: p.views,
       post_cooked: p.post_cooked,
-      likedByMe: likedByMe.has(g.id),
     };
   });
 }
@@ -122,30 +124,20 @@ export async function listGames({ category, jam, sort, limit = 10 }: ListParams)
 
   if (gameIds.length === 0) return [];
 
-  const user = await getUser();
-
   const [{ data: games }, { data: stats }, { data: posts }] = await Promise.all([
     supabaseServer.from("games").select("*").in("id", gameIds),
-    supabaseServer.from("game_stats").select("*").in("game_id", gameIds),
-    supabaseServer.from("game_forum_posts").select("game_id,forum_url,reply_count,view_count,post_cooked").in("game_id", gameIds),
+    supabaseServer.from("game_stats").select("game_id, clicks").in("game_id", gameIds),
+    supabaseServer
+      .from("game_forum_posts")
+      .select("game_id,forum_url,reply_count,view_count,post_cooked,reaction_count")
+      .in("game_id", gameIds),
   ]);
-
-  const likedByMe = new Set<string>();
-  if (user) {
-    const { data } = await supabaseServer
-      .from("game_likes")
-      .select("game_id")
-      .in("game_id", gameIds)
-      .eq("user_id", user.id);
-    ((data || []) as unknown as LikeRow[]).forEach((l) => likedByMe.add(l.game_id));
-  }
 
   const gameRows = (games || []) as unknown as GameWithStats[];
   const merged = mergeGameData(
     gameRows,
     (stats || []) as unknown as StatsRow[],
-    (posts || []) as unknown as PostRow[],
-    likedByMe
+    (posts || []) as unknown as PostRow[]
   );
 
   if (sort === "likes") {
@@ -169,8 +161,6 @@ export async function searchGames(query: string): Promise<GameWithStats[]> {
   const trimmed = query.trim();
   if (!trimmed) return [];
 
-  const user = await getUser();
-
   const { data: games } = await supabaseServer
     .from("games")
     .select("*")
@@ -182,28 +172,17 @@ export async function searchGames(query: string): Promise<GameWithStats[]> {
   const gameIds = gameRows.map((g) => g.id);
 
   const [{ data: stats }, { data: posts }] = await Promise.all([
-    supabaseServer.from("game_stats").select("*").in("game_id", gameIds),
+    supabaseServer.from("game_stats").select("game_id, clicks").in("game_id", gameIds),
     supabaseServer
       .from("game_forum_posts")
-      .select("game_id,forum_url,reply_count,view_count,post_cooked")
+      .select("game_id,forum_url,reply_count,view_count,post_cooked,reaction_count")
       .in("game_id", gameIds),
   ]);
-
-  const likedByMe = new Set<string>();
-  if (user) {
-    const { data } = await supabaseServer
-      .from("game_likes")
-      .select("game_id")
-      .in("game_id", gameIds)
-      .eq("user_id", user.id);
-    ((data || []) as unknown as LikeRow[]).forEach((l) => likedByMe.add(l.game_id));
-  }
 
   const merged = mergeGameData(
     gameRows,
     (stats || []) as unknown as StatsRow[],
-    (posts || []) as unknown as PostRow[],
-    likedByMe
+    (posts || []) as unknown as PostRow[]
   );
 
   const lowerQuery = trimmed.toLowerCase();
@@ -231,6 +210,11 @@ export async function addLike(gameId: string) {
 export async function recordClick(gameId: string) {
   const user = await getUser().catch(() => null);
   await supabaseServer.from("game_clicks").insert({ game_id: gameId, user_id: user?.id || null });
+  try {
+    await refreshGameReactions(gameId);
+  } catch (error) {
+    console.error("Failed to refresh reactions:", error);
+  }
 }
 
 export async function signOut() {

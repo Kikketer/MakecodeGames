@@ -17,6 +17,9 @@ type DiscourseTopic = {
   posts_count: number;
   views: number;
   created_at?: string;
+  bumped_at?: string;
+  last_posted_at?: string;
+  bumped?: boolean;
 };
 
 type DiscoursePost = {
@@ -26,6 +29,7 @@ type DiscoursePost = {
   user_id: number;
   username: string;
   created_at?: string;
+  reaction_users_count?: number;
 };
 
 type TopicPage = DiscourseTopic & { post_stream: { posts: DiscoursePost[] } };
@@ -150,9 +154,11 @@ async function upsertForumPost(
   categoryName: string,
   jamId: string | undefined,
   replyCount: number,
-  viewCount: number
+  viewCount: number,
+  reactionCount: number
 ) {
   const forumUrl = `${FORUM_BASE}/t/${topicSlug}/${topicId}/${post.post_number}`;
+  const now = new Date().toISOString();
   const { error } = await supabaseServer.from("game_forum_posts").upsert(
     {
       game_id: gameId,
@@ -162,10 +168,12 @@ async function upsertForumPost(
       forum_category_id: categoryId,
       forum_category_name: categoryName,
       jam_id: jamId || null,
-      seen_at: new Date().toISOString(),
+      seen_at: now,
       reply_count: Math.max(0, replyCount - 1),
       view_count: viewCount,
       post_cooked: post.cooked,
+      reaction_count: reactionCount,
+      reaction_refreshed_at: now,
     },
     { onConflict: "game_id, forum_topic_id, forum_post_id" }
   );
@@ -199,18 +207,14 @@ async function upsertJam(topic: DiscourseTopic): Promise<string | undefined> {
   return data?.id as string | undefined;
 }
 
-async function ingestPost(
+export async function ingestPost(
   shareUrl: string,
   post: DiscoursePost,
   topic: DiscourseTopic,
   categoryMap: CategoryMap,
   jamId?: string,
-  lastIngestAt?: Date
+  reactionCount?: number
 ): Promise<string | null> {
-  if (lastIngestAt && post.created_at && new Date(post.created_at) < lastIngestAt) {
-    return null;
-  }
-
   const urlId = shareUrlToId(shareUrl);
   const meta = await normalizeMakeCode(urlId);
   if (!meta) return null;
@@ -226,15 +230,26 @@ async function ingestPost(
     categoryName,
     jamId,
     topic.posts_count || 0,
-    topic.views || 0
+    topic.views || 0,
+    reactionCount ?? (post.reaction_users_count ?? 0)
   );
   return gameId;
 }
 
-async function fetchAllTopicPosts(
-  topicId: number,
-  lastIngestAt?: Date
-): Promise<{ topic: DiscourseTopic | null; posts: DiscoursePost[] }> {
+async function refreshPostReactions(post: DiscoursePost, topicId: number) {
+  const count = post.reaction_users_count ?? 0;
+  const { error } = await supabaseServer
+    .from("game_forum_posts")
+    .update({
+      reaction_count: count,
+      reaction_refreshed_at: new Date().toISOString(),
+    })
+    .eq("forum_topic_id", topicId)
+    .eq("forum_post_id", post.id);
+  if (error) throw error;
+}
+
+async function fetchAllTopicPosts(topicId: number): Promise<{ topic: DiscourseTopic | null; posts: DiscoursePost[] }> {
   const first = await fetchJson<TopicPage>(`${FORUM_BASE}/t/${topicId}.json`);
   if (!first) return { topic: null, posts: [] };
 
@@ -245,13 +260,7 @@ async function fetchAllTopicPosts(
   for (let page = 2; page <= pages; page++) {
     const next = await fetchJson<TopicPage>(`${FORUM_BASE}/t/${topicId}.json?page=${page}`);
     if (!next) break;
-
     posts.push(...next.post_stream.posts);
-
-    const oldest = next.post_stream.posts[next.post_stream.posts.length - 1];
-    if (lastIngestAt && oldest?.created_at && new Date(oldest.created_at) < lastIngestAt) {
-      break;
-    }
   }
 
   const topic: DiscourseTopic = { ...first, id: topicId };
@@ -262,7 +271,7 @@ export async function ingestJamTopic(
   topicId: number,
   lastIngestAt?: Date
 ): Promise<{ games: number; errors: string[] }> {
-  const { topic, posts } = await fetchAllTopicPosts(topicId, lastIngestAt);
+  const { topic, posts } = await fetchAllTopicPosts(topicId);
   if (!topic) return { games: 0, errors: [`topic ${topicId} not found`] };
 
   const categoryMap = await getCategories();
@@ -272,14 +281,18 @@ export async function ingestJamTopic(
 
   for (const post of posts) {
     if (post.post_number === 1) continue;
-    const urls = extractShareUrls(post.cooked);
-    for (const url of urls) {
-      try {
-        const gameId = await ingestPost(url, post, topic, categoryMap, jam, lastIngestAt);
-        if (gameId) games++;
-      } catch (e) {
-        errors.push(String(e));
+    try {
+      if (!lastIngestAt || (post.created_at && new Date(post.created_at) >= lastIngestAt)) {
+        const urls = extractShareUrls(post.cooked);
+        for (const url of urls) {
+          const gameId = await ingestPost(url, post, topic, categoryMap, jam);
+          if (gameId) games++;
+        }
+      } else {
+        await refreshPostReactions(post, topic.id);
       }
+    } catch (e) {
+      errors.push(String(e));
     }
   }
 
@@ -300,19 +313,30 @@ export async function ingestCategoryTopics(
   const errors: string[] = [];
   let games = 0;
 
+  const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
   for (const topic of category.topic_list.topics.slice(0, limit)) {
-    const { topic: fullTopic, posts } = await fetchAllTopicPosts(topic.id, lastIngestAt);
+    if (lastIngestAt) {
+      const bumpedAt = topic.bumped_at ? new Date(topic.bumped_at) : null;
+      if (!bumpedAt || bumpedAt < oneDayAgo) continue;
+    }
+
+    const { topic: fullTopic, posts } = await fetchAllTopicPosts(topic.id);
     if (!fullTopic) continue;
 
     for (const post of posts) {
-      const urls = extractShareUrls(post.cooked);
-      for (const url of urls) {
-        try {
-          const gameId = await ingestPost(url, post, fullTopic, categoryMap, undefined, lastIngestAt);
-          if (gameId) games++;
-        } catch (e) {
-          errors.push(String(e));
+      try {
+        if (!lastIngestAt || (post.created_at && new Date(post.created_at) >= lastIngestAt)) {
+          const urls = extractShareUrls(post.cooked);
+          for (const url of urls) {
+            const gameId = await ingestPost(url, post, fullTopic, categoryMap);
+            if (gameId) games++;
+          }
+        } else {
+          await refreshPostReactions(post, fullTopic.id);
         }
+      } catch (e) {
+        errors.push(String(e));
       }
     }
   }
@@ -353,4 +377,32 @@ export async function ingestOnce(): Promise<IngestResult> {
   });
 
   return result;
+}
+
+export async function refreshGameReactions(gameId: string): Promise<void> {
+  const { data: rows } = await supabaseServer
+    .from("game_forum_posts")
+    .select("forum_post_id, reaction_refreshed_at")
+    .eq("game_id", gameId);
+  if (!rows || rows.length === 0) return;
+
+  const now = Date.now();
+  const oneHour = 60 * 60 * 1000;
+
+  for (const row of rows as { forum_post_id: number; reaction_refreshed_at: string | null }[]) {
+    const refreshedAt = row.reaction_refreshed_at ? new Date(row.reaction_refreshed_at).getTime() : 0;
+    if (now - refreshedAt < oneHour) continue;
+
+    const post = await fetchJson<DiscoursePost>(`${FORUM_BASE}/posts/${row.forum_post_id}.json`);
+    if (!post) continue;
+
+    await supabaseServer
+      .from("game_forum_posts")
+      .update({
+        reaction_count: post.reaction_users_count ?? 0,
+        reaction_refreshed_at: new Date().toISOString(),
+      })
+      .eq("game_id", gameId)
+      .eq("forum_post_id", row.forum_post_id);
+  }
 }
