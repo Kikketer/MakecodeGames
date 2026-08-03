@@ -5,6 +5,7 @@ import { JamSelector } from "./components/JamSelector";
 import { GameRow } from "./components/GameRow";
 import { GameJamList } from "./components/GameJamList";
 import { AuthButton } from "./components/AuthButton";
+import { SearchBox } from "./components/SearchBox";
 
 export default async function GamesPage({
   searchParams,
@@ -47,7 +48,10 @@ export default async function GamesPage({
               to make a game!
             </p>
           </div>
-          <AuthButton user={user} />
+          <div className="flex items-center gap-3">
+            <SearchBox />
+            <AuthButton user={user} />
+          </div>
         </div>
       </header>
 

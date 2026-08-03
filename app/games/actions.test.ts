@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { addLike, listGames } from "./actions";
+import { addLike, listGames, searchGames } from "./actions";
 
 const mockSupabase = vi.hoisted(() => ({ from: vi.fn() }));
 const mockGetUser = vi.hoisted(() => vi.fn());
@@ -105,5 +105,66 @@ describe("listGames", () => {
 
     expect(result).toHaveLength(2);
     expect(result.every((g) => g.likedByMe === false)).toBe(true);
+  });
+});
+
+const searchResponses = {
+  games: {
+    data: [
+      { id: "g1", title: "Space Quest", first_seen_at: "2026-08-02T00:00:00Z" },
+      { id: "g2", title: "My Space Game", first_seen_at: "2026-08-03T00:00:00Z" },
+      { id: "g3", title: "A Space Adventure", first_seen_at: "2026-08-01T00:00:00Z" },
+    ],
+  },
+  game_stats: {
+    data: [
+      { game_id: "g1", likes: 5, clicks: 1 },
+      { game_id: "g2", likes: 2, clicks: 0 },
+      { game_id: "g3", likes: 8, clicks: 3 },
+    ],
+  },
+  game_forum_posts: {
+    data: [
+      { game_id: "g1", forum_url: "https://forum.makecode.com/t/g1", reply_count: 1, view_count: 2, post_cooked: null },
+      { game_id: "g2", forum_url: "https://forum.makecode.com/t/g2", reply_count: 0, view_count: 1, post_cooked: null },
+    ],
+  },
+  game_likes: {
+    data: [{ game_id: "g2" }],
+  },
+};
+
+describe("searchGames", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSupabase.from = vi.fn((table: string) => makeBuilder(table, searchResponses[table as keyof typeof searchResponses]));
+    mockGetUser.mockReset();
+  });
+
+  it("returns an empty array for empty or whitespace-only queries", async () => {
+    expect(await searchGames("")).toEqual([]);
+    expect(await searchGames("   ")).toEqual([]);
+    expect(mockSupabase.from).not.toHaveBeenCalled();
+  });
+
+  it("ranks matches by earliest title position, then newest first_seen_at", async () => {
+    const result = await searchGames("space");
+    expect(result.map((g) => g.id)).toEqual(["g1", "g3", "g2"]);
+  });
+
+  it("merges stats, forum posts, and likedByMe", async () => {
+    mockGetUser.mockResolvedValue({ id: "user-1" });
+
+    const result = await searchGames("space");
+
+    expect(result).toHaveLength(3);
+    const g1 = result.find((g) => g.id === "g1");
+    const g2 = result.find((g) => g.id === "g2");
+    const g3 = result.find((g) => g.id === "g3");
+    expect(g1?.likes).toBe(5);
+    expect(g1?.forum_url).toBe("https://forum.makecode.com/t/g1");
+    expect(g2?.likedByMe).toBe(true);
+    expect(g3?.likes).toBe(8);
+    expect(g3?.forum_url).toBe("");
   });
 });
