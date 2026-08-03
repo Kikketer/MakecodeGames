@@ -6,6 +6,7 @@ import type { GameWithStats } from "@/app/games/actions";
 const mockSearchGames = vi.hoisted(() => vi.fn());
 const mockRecordClick = vi.hoisted(() => vi.fn());
 const mockPush = vi.hoisted(() => vi.fn());
+const mockWindowOpen = vi.hoisted(() => vi.fn());
 
 vi.mock("@/app/games/actions", () => ({
   searchGames: mockSearchGames,
@@ -33,13 +34,17 @@ function makeGame(title: string, id: string): GameWithStats {
 }
 
 describe("SearchBox", () => {
+  let windowOpenSpy: ReturnType<typeof vi.spyOn>;
+
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers({ shouldAdvanceTime: true });
+    windowOpenSpy = vi.spyOn(window, "open").mockImplementation(mockWindowOpen);
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    windowOpenSpy.mockRestore();
   });
 
   it("does not call searchGames for empty or whitespace input", async () => {
@@ -118,5 +123,77 @@ describe("SearchBox", () => {
     fireEvent.click(link);
 
     expect(mockRecordClick).toHaveBeenCalledWith("g1");
+  });
+
+  it("highlights the first dropdown result with ArrowDown", async () => {
+    const game = makeGame("Hall of Fame", "g1");
+    mockSearchGames.mockResolvedValue([game]);
+    render(<SearchBox />);
+    const input = screen.getByRole("searchbox");
+
+    fireEvent.change(input, { target: { value: "hall" } });
+    await act(() => vi.advanceTimersByTimeAsync(300));
+
+    const link = screen.getByRole("link");
+    expect(link.className).not.toContain("bg-makecode-yellow");
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(link.className).toContain("bg-makecode-yellow");
+  });
+
+  it("opens the highlighted result with Enter", async () => {
+    const game = makeGame("Hall of Fame", "g1");
+    mockSearchGames.mockResolvedValue([game]);
+    render(<SearchBox />);
+    const input = screen.getByRole("searchbox");
+
+    fireEvent.change(input, { target: { value: "hall" } });
+    await act(() => vi.advanceTimersByTimeAsync(300));
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(mockWindowOpen).toHaveBeenCalledWith(
+      game.game_url,
+      "_blank",
+      "noopener,noreferrer"
+    );
+    expect(mockRecordClick).toHaveBeenCalledWith("g1");
+  });
+
+  it("moves the highlight up and down with arrow keys", async () => {
+    const games = [makeGame("One", "g1"), makeGame("Two", "g2")];
+    mockSearchGames.mockResolvedValue(games);
+    render(<SearchBox />);
+    const input = screen.getByRole("searchbox");
+
+    fireEvent.change(input, { target: { value: "game" } });
+    await act(() => vi.advanceTimersByTimeAsync(300));
+
+    const links = screen.getAllByRole("link");
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(links[0].className).toContain("bg-makecode-yellow");
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(links[1].className).toContain("bg-makecode-yellow");
+    expect(links[0].className).not.toContain("bg-makecode-yellow");
+
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(links[0].className).toContain("bg-makecode-yellow");
+  });
+
+  it("updates the highlighted result on mouse hover", async () => {
+    const games = [makeGame("One", "g1"), makeGame("Two", "g2")];
+    mockSearchGames.mockResolvedValue(games);
+    render(<SearchBox />);
+    const input = screen.getByRole("searchbox");
+
+    fireEvent.change(input, { target: { value: "game" } });
+    await act(() => vi.advanceTimersByTimeAsync(300));
+
+    const links = screen.getAllByRole("link");
+    fireEvent.mouseEnter(links[1]);
+    expect(links[1].className).toContain("bg-makecode-yellow");
+    expect(links[0].className).not.toContain("bg-makecode-yellow");
   });
 });

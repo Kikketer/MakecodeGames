@@ -38,6 +38,7 @@ export function SearchBox() {
   const [results, setResults] = useState<GameWithStats[]>([]);
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
+  const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const containerRef = useRef<HTMLDivElement>(null);
   const [, startTransition] = useTransition();
   const router = useRouter();
@@ -51,6 +52,7 @@ export function SearchBox() {
       try {
         const matches = await searchGames(trimmed);
         setResults(matches.slice(0, MAX_DROPDOWN_RESULTS));
+        setHighlightedIndex(-1);
         setOpen(matches.length > 0);
       } finally {
         setPending(false);
@@ -63,6 +65,7 @@ export function SearchBox() {
   function handleChange(event: React.ChangeEvent<HTMLInputElement>) {
     const value = event.target.value;
     setQuery(value);
+    setHighlightedIndex(-1);
     if (!value.trim()) {
       setResults([]);
       setOpen(false);
@@ -90,11 +93,43 @@ export function SearchBox() {
   function handleResultClick(game: GameWithStats) {
     startTransition(() => recordClick(game.id));
     setOpen(false);
+    setHighlightedIndex(-1);
+  }
+
+  function openHighlightedResult() {
+    const game = results[highlightedIndex];
+    if (!game) return;
+    startTransition(() => recordClick(game.id));
+    window.open(game.game_url, "_blank", "noopener,noreferrer");
+    setOpen(false);
+    setHighlightedIndex(-1);
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setOpen(true);
+      setHighlightedIndex((prev) => Math.min(prev + 1, results.length - 1));
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setHighlightedIndex((prev) => Math.max(prev - 1, -1));
+      return;
+    }
+
+    if (event.key === "Enter") {
+      if (highlightedIndex >= 0 && results[highlightedIndex]) {
+        event.preventDefault();
+        openHighlightedResult();
+      }
+      return;
+    }
+
     if (event.key === "Escape") {
       setOpen(false);
+      setHighlightedIndex(-1);
       event.currentTarget.blur();
     }
   }
@@ -131,14 +166,17 @@ export function SearchBox() {
 
       {open && (
         <div className="absolute right-0 top-full z-10 mt-1 w-72 border-2 border-makecode-black bg-white shadow-[4px_4px_0_#000000]">
-          {results.map((game) => (
+          {results.map((game, index) => (
             <a
               key={game.id}
               href={game.game_url}
               target="_blank"
               rel="noopener noreferrer"
               onClick={() => handleResultClick(game)}
-              className="flex items-center gap-3 px-3 py-2 hover:bg-makecode-cyan"
+              onMouseEnter={() => setHighlightedIndex(index)}
+              className={`flex items-center gap-3 px-3 py-2 hover:bg-makecode-cyan ${
+                index === highlightedIndex ? "bg-makecode-yellow" : ""
+              }`}
             >
               <DropdownThumb src={game.thumb_url} alt={game.title} />
               <span
