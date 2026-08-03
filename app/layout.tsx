@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "MakeCode.Games",
+  title: "MakeCode Games!",
   description: "A community library of MakeCode Arcade games.",
 };
 
