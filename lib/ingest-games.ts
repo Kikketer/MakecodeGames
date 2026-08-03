@@ -172,14 +172,21 @@ async function upsertForumPost(
   if (error) throw error;
 }
 
+function shortJamTitle(title: string): string {
+  const hash = title.indexOf("#");
+  if (hash === -1) return title;
+  return title.slice(hash).trim();
+}
+
 async function upsertJam(topic: DiscourseTopic): Promise<string | undefined> {
+  const title = shortJamTitle(topic.title);
   const { data, error } = await supabaseServer
     .from("game_jams")
     .upsert(
       {
         forum_topic_id: topic.id,
-        title: topic.title,
-        slug: topic.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
+        title,
+        slug: title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
         category_id: topic.category_id,
         type: "mini",
         announced_at: topic.created_at || new Date().toISOString(),
