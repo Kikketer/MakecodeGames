@@ -4,7 +4,6 @@ import { CategoryTabs } from "./components/CategoryTabs";
 import { JamSelector } from "./components/JamSelector";
 import { GameRow } from "./components/GameRow";
 import { GameJamList } from "./components/GameJamList";
-import { AuthButton } from "./components/AuthButton";
 
 export default async function GamesPage({
   searchParams,
@@ -28,44 +27,20 @@ export default async function GamesPage({
   const isJam = activeCategory === "game-jams";
 
   return (
-    <>
-      <header className="bg-makecode-blue border-b-4 border-makecode-white px-6 py-4">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h1 className="font-sans text-3xl font-bold text-white">MakeCode Games!</h1>
-            <p className="mt-1 font-sans text-sm text-makecode-tan">
-              This is not affiliated with Microsoft, this is a fan-made site.{" "}
-              Visit{" "}
-              <a
-                href="https://arcade.makecode.com"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="font-bold text-white hover:underline"
-              >
-                MakeCode Arcade
-              </a>{" "}
-              to make a game!
-            </p>
-          </div>
-          <AuthButton user={user} />
+    <main className="flex flex-1 flex-col gap-6 bg-makecode-dark px-6 py-6">
+      <CategoryTabs categories={categories} active={activeCategory} />
+
+      {isJam && <JamSelector jams={jams} activeJam={activeJam} />}
+
+      {isJam ? (
+        <GameJamList games={hot} user={user} />
+      ) : (
+        <div className="flex flex-col gap-8">
+          <GameRow title="Hot" games={hot} user={user} />
+          <GameRow title="Most Liked" games={liked} user={user} />
+          <GameRow title="Newest" games={newest} user={user} />
         </div>
-      </header>
-
-      <main className="flex flex-1 flex-col gap-6 bg-makecode-dark px-6 py-6">
-        <CategoryTabs categories={categories} active={activeCategory} />
-
-        {isJam && <JamSelector jams={jams} activeJam={activeJam} />}
-
-        {isJam ? (
-          <GameJamList games={hot} user={user} />
-        ) : (
-          <div className="flex flex-col gap-8">
-            <GameRow title="Hot" games={hot} user={user} />
-            <GameRow title="Most Liked" games={liked} user={user} />
-            <GameRow title="Newest" games={newest} user={user} />
-          </div>
-        )}
-      </main>
-    </>
+      )}
+    </main>
   );
 }
