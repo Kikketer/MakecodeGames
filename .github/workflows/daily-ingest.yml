@@ -11,5 +11,5 @@ jobs:
     steps:
       - name: Ingest games from MakeCode forums
         run: |
-          curl -s -X GET "${{ secrets.INGEST_URL }}/api/games/ingest" \
+          curl -s -X GET "${{ vars.INGEST_URL }}/api/games/ingest" \
             -H "Authorization: Bearer ${{ secrets.INGEST_SECRET }}"
