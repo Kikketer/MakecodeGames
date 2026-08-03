@@ -39,6 +39,47 @@ type ListParams = {
   limit?: number;
 };
 
+function mergeGameData(
+  games: GameWithStats[],
+  stats: StatsRow[],
+  posts: PostRow[],
+  likedByMe: Set<string>
+): GameWithStats[] {
+  const statsMap = new Map(
+    stats.map((s) => [
+      s.game_id,
+      { likes: s.likes || 0, clicks: s.clicks || 0 },
+    ])
+  );
+
+  const forumMap = new Map<string, { url: string; replies: number; views: number; post_cooked: string | null }>();
+  posts.forEach((p) => {
+    if (!forumMap.has(p.game_id)) {
+      forumMap.set(p.game_id, {
+        url: p.forum_url,
+        replies: p.reply_count || 0,
+        views: p.view_count || 0,
+        post_cooked: p.post_cooked,
+      });
+    }
+  });
+
+  return games.map((g) => {
+    const s = statsMap.get(g.id) || { likes: 0, clicks: 0 };
+    const p = forumMap.get(g.id) || { url: "", replies: 0, views: 0, post_cooked: null };
+    return {
+      ...g,
+      likes: s.likes,
+      clicks: s.clicks,
+      forum_url: p.url,
+      replies: p.replies,
+      views: p.views,
+      post_cooked: p.post_cooked,
+      likedByMe: likedByMe.has(g.id),
+    };
+  });
+}
+
 export async function listCategories(): Promise<CategoryRow[]> {
   const { data } = await supabaseServer.from("forum_categories").select("*").order("name");
   return (data || []) as unknown as CategoryRow[];
@@ -89,25 +130,6 @@ export async function listGames({ category, jam, sort, limit = 10 }: ListParams)
     supabaseServer.from("game_forum_posts").select("game_id,forum_url,reply_count,view_count,post_cooked").in("game_id", gameIds),
   ]);
 
-  const statsMap = new Map(
-    ((stats || []) as unknown as StatsRow[]).map((s) => [
-      s.game_id,
-      { likes: s.likes || 0, clicks: s.clicks || 0 },
-    ])
-  );
-
-  const forumMap = new Map<string, { url: string; replies: number; views: number; post_cooked: string | null }>();
-  ((posts || []) as unknown as PostRow[]).forEach((p) => {
-    if (!forumMap.has(p.game_id)) {
-      forumMap.set(p.game_id, {
-        url: p.forum_url,
-        replies: p.reply_count || 0,
-        views: p.view_count || 0,
-        post_cooked: p.post_cooked,
-      });
-    }
-  });
-
   const likedByMe = new Set<string>();
   if (user) {
     const { data } = await supabaseServer
@@ -119,20 +141,12 @@ export async function listGames({ category, jam, sort, limit = 10 }: ListParams)
   }
 
   const gameRows = (games || []) as unknown as GameWithStats[];
-  const merged = gameRows.map((g) => {
-    const s = statsMap.get(g.id) || { likes: 0, clicks: 0 };
-    const p = forumMap.get(g.id) || { url: "", replies: 0, views: 0, post_cooked: null };
-    return {
-      ...g,
-      likes: s.likes,
-      clicks: s.clicks,
-      forum_url: p.url,
-      replies: p.replies,
-      views: p.views,
-      post_cooked: p.post_cooked,
-      likedByMe: likedByMe.has(g.id),
-    };
-  });
+  const merged = mergeGameData(
+    gameRows,
+    (stats || []) as unknown as StatsRow[],
+    (posts || []) as unknown as PostRow[],
+    likedByMe
+  );
 
   if (sort === "likes") {
     merged.sort((a, b) => b.likes - a.likes);
@@ -149,6 +163,58 @@ export async function listGames({ category, jam, sort, limit = 10 }: ListParams)
   }
 
   return merged.slice(0, limit);
+}
+
+export async function searchGames(query: string): Promise<GameWithStats[]> {
+  const trimmed = query.trim();
+  if (!trimmed) return [];
+
+  const user = await getUser();
+
+  const { data: games } = await supabaseServer
+    .from("games")
+    .select("*")
+    .ilike("title", `%${trimmed}%`);
+
+  const gameRows = (games || []) as unknown as GameWithStats[];
+  if (gameRows.length === 0) return [];
+
+  const gameIds = gameRows.map((g) => g.id);
+
+  const [{ data: stats }, { data: posts }] = await Promise.all([
+    supabaseServer.from("game_stats").select("*").in("game_id", gameIds),
+    supabaseServer
+      .from("game_forum_posts")
+      .select("game_id,forum_url,reply_count,view_count,post_cooked")
+      .in("game_id", gameIds),
+  ]);
+
+  const likedByMe = new Set<string>();
+  if (user) {
+    const { data } = await supabaseServer
+      .from("game_likes")
+      .select("game_id")
+      .in("game_id", gameIds)
+      .eq("user_id", user.id);
+    ((data || []) as unknown as LikeRow[]).forEach((l) => likedByMe.add(l.game_id));
+  }
+
+  const merged = mergeGameData(
+    gameRows,
+    (stats || []) as unknown as StatsRow[],
+    (posts || []) as unknown as PostRow[],
+    likedByMe
+  );
+
+  const lowerQuery = trimmed.toLowerCase();
+  merged.sort((a, b) => {
+    const ai = a.title.toLowerCase().indexOf(lowerQuery);
+    const bi = b.title.toLowerCase().indexOf(lowerQuery);
+    if (ai !== bi) return ai - bi;
+    return new Date(b.first_seen_at).getTime() - new Date(a.first_seen_at).getTime();
+  });
+
+  return merged;
 }
 
 export async function addLike(gameId: string) {
