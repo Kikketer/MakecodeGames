@@ -1,13 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { addLike, listGames, searchGames } from "./actions";
+import { addLike, listGames, recordClick, searchGames } from "./actions";
 
 const mockSupabase = vi.hoisted(() => ({ from: vi.fn() }));
 const mockGetUser = vi.hoisted(() => vi.fn());
 const mockRevalidatePath = vi.hoisted(() => vi.fn());
+const mockRefreshReactions = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/supabase-server", () => ({ supabaseServer: mockSupabase }));
 vi.mock("@/lib/auth", () => ({ getUser: mockGetUser }));
 vi.mock("next/cache", () => ({ revalidatePath: mockRevalidatePath }));
+vi.mock("@/lib/ingest-games", () => ({ refreshGameReactions: mockRefreshReactions }));
 
 function makeBuilder(table: string, response: unknown) {
   const thenable = {
@@ -30,14 +32,14 @@ const responses = {
   },
   game_stats: {
     data: [
-      { game_id: "g1", likes: 10, clicks: 2 },
-      { game_id: "g2", likes: 5, clicks: 0 },
+      { game_id: "g1", clicks: 2 },
+      { game_id: "g2", clicks: 0 },
     ],
   },
   game_forum_posts: {
     data: [
-      { game_id: "g1", forum_url: "https://forum.makecode.com/t/g1", reply_count: 3, view_count: 5, post_cooked: null },
-      { game_id: "g2", forum_url: "https://forum.makecode.com/t/g2", reply_count: 0, view_count: 1, post_cooked: null },
+      { game_id: "g1", forum_url: "https://forum.makecode.com/t/g1", reply_count: 3, view_count: 5, post_cooked: null, reaction_count: 10 },
+      { game_id: "g2", forum_url: "https://forum.makecode.com/t/g2", reply_count: 0, view_count: 1, post_cooked: null, reaction_count: 5 },
     ],
   },
   game_likes: {
@@ -51,6 +53,7 @@ describe("addLike", () => {
     mockSupabase.from = vi.fn();
     mockGetUser.mockReset();
     mockRevalidatePath.mockReset();
+    mockRefreshReactions.mockReset();
   });
 
   it("throws if the user is not signed in", async () => {
@@ -82,29 +85,21 @@ describe("listGames", () => {
     vi.clearAllMocks();
     mockSupabase.from = vi.fn((table: string) => makeBuilder(table, responses[table as keyof typeof responses]));
     mockGetUser.mockReset();
+    mockRefreshReactions.mockReset();
   });
 
-  it("merges likedByMe for a signed-in user", async () => {
-    mockGetUser.mockResolvedValue({ id: "user-1" });
+  it("uses reaction_count as likes and game_stats for clicks", async () => {
+    mockGetUser.mockResolvedValue(null);
 
     const result = await listGames({ sort: "hot", limit: 10 });
 
     expect(result).toHaveLength(2);
     const g1 = result.find((g) => g.id === "g1");
     const g2 = result.find((g) => g.id === "g2");
-    expect(g1?.likedByMe).toBe(true);
     expect(g1?.likes).toBe(10);
-    expect(g2?.likedByMe).toBe(false);
+    expect(g1?.clicks).toBe(2);
     expect(g2?.likes).toBe(5);
-  });
-
-  it("sets likedByMe to false when no user is signed in", async () => {
-    mockGetUser.mockResolvedValue(null);
-
-    const result = await listGames({ sort: "hot", limit: 10 });
-
-    expect(result).toHaveLength(2);
-    expect(result.every((g) => g.likedByMe === false)).toBe(true);
+    expect(g2?.clicks).toBe(0);
   });
 });
 
@@ -118,19 +113,20 @@ const searchResponses = {
   },
   game_stats: {
     data: [
-      { game_id: "g1", likes: 5, clicks: 1 },
-      { game_id: "g2", likes: 2, clicks: 0 },
-      { game_id: "g3", likes: 8, clicks: 3 },
+      { game_id: "g1", clicks: 1 },
+      { game_id: "g2", clicks: 0 },
+      { game_id: "g3", clicks: 3 },
     ],
   },
   game_forum_posts: {
     data: [
-      { game_id: "g1", forum_url: "https://forum.makecode.com/t/g1", reply_count: 1, view_count: 2, post_cooked: null },
-      { game_id: "g2", forum_url: "https://forum.makecode.com/t/g2", reply_count: 0, view_count: 1, post_cooked: null },
+      { game_id: "g1", forum_url: "https://forum.makecode.com/t/g1", reply_count: 1, view_count: 2, post_cooked: null, reaction_count: 5 },
+      { game_id: "g2", forum_url: "https://forum.makecode.com/t/g2", reply_count: 0, view_count: 1, post_cooked: null, reaction_count: 2 },
+      { game_id: "g3", forum_url: "", reply_count: 0, view_count: 0, post_cooked: null, reaction_count: 8 },
     ],
   },
   game_likes: {
-    data: [{ game_id: "g2" }],
+    data: [],
   },
 };
 
@@ -139,6 +135,7 @@ describe("searchGames", () => {
     vi.clearAllMocks();
     mockSupabase.from = vi.fn((table: string) => makeBuilder(table, searchResponses[table as keyof typeof searchResponses]));
     mockGetUser.mockReset();
+    mockRefreshReactions.mockReset();
   });
 
   it("returns an empty array for empty or whitespace-only queries", async () => {
@@ -152,8 +149,8 @@ describe("searchGames", () => {
     expect(result.map((g) => g.id)).toEqual(["g1", "g3", "g2"]);
   });
 
-  it("merges stats, forum posts, and likedByMe", async () => {
-    mockGetUser.mockResolvedValue({ id: "user-1" });
+  it("uses reaction_count as likes and stats for clicks", async () => {
+    mockGetUser.mockResolvedValue(null);
 
     const result = await searchGames("space");
 
@@ -163,8 +160,37 @@ describe("searchGames", () => {
     const g3 = result.find((g) => g.id === "g3");
     expect(g1?.likes).toBe(5);
     expect(g1?.forum_url).toBe("https://forum.makecode.com/t/g1");
-    expect(g2?.likedByMe).toBe(true);
+    expect(g2?.likes).toBe(2);
     expect(g3?.likes).toBe(8);
     expect(g3?.forum_url).toBe("");
+  });
+});
+
+describe("recordClick", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSupabase.from = vi.fn((table: string) => makeBuilder(table, undefined));
+    mockGetUser.mockReset();
+    mockRefreshReactions.mockReset();
+  });
+
+  it("records an anonymous click and refreshes reactions in the background", async () => {
+    mockGetUser.mockRejectedValue(new Error("no session"));
+    mockRefreshReactions.mockResolvedValue(undefined);
+
+    await recordClick("game-1");
+
+    expect(mockSupabase.from).toHaveBeenCalledWith("game_clicks");
+    expect(mockRefreshReactions).toHaveBeenCalledWith("game-1");
+  });
+
+  it("still records a click even if reaction refresh fails", async () => {
+    mockGetUser.mockResolvedValue(null);
+    mockRefreshReactions.mockRejectedValue(new Error("network"));
+
+    await recordClick("game-2");
+
+    expect(mockSupabase.from).toHaveBeenCalledWith("game_clicks");
+    expect(mockRefreshReactions).toHaveBeenCalledWith("game-2");
   });
 });

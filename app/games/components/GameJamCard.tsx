@@ -2,12 +2,11 @@
 
 import { useState, useTransition } from "react";
 import Image from "next/image";
-import { User } from "@supabase/supabase-js";
 import { GameWithStats } from "@/app/games/actions";
 import { recordClick } from "@/app/games/actions";
 import { LikeControl } from "./LikeControl";
 
-export function GameJamCard({ game, user }: { game: GameWithStats; user: User | null }) {
+export function GameJamCard({ game }: { game: GameWithStats }) {
   const [failed, setFailed] = useState(false);
   const [, startTransition] = useTransition();
 
@@ -21,17 +20,21 @@ export function GameJamCard({ game, user }: { game: GameWithStats; user: User | 
           <p className="font-sans text-sm text-makecode-brown">{game.author_username || "Anonymous"}</p>
         </div>
         <div className="flex items-center gap-3">
-          <LikeControl game={game} user={user} />
-          <a
-            href={game.forum_url || `https://forum.makecode.com/t/${game.id}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label={`Visit the forum post for ${game.title}`}
-            title={`Visit the forum post for ${game.title}`}
-            className="font-sans text-sm font-bold text-makecode-blue hover:underline"
-          >
-            Forum ({game.replies})
-          </a>
+          <LikeControl game={game} />
+          {game.forum_url ? (
+            <a
+              href={game.forum_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`Visit the forum post for ${game.title}`}
+              title={`Visit the forum post for ${game.title}`}
+              className="font-sans text-sm font-bold text-makecode-blue hover:underline"
+            >
+              Forum ({game.replies})
+            </a>
+          ) : (
+            <span className="font-sans text-sm font-bold text-makecode-brown">Forum ({game.replies})</span>
+          )}
         </div>
       </div>
 

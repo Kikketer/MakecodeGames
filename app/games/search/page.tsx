@@ -1,7 +1,5 @@
 import Link from "next/link";
-import { getUser } from "@/lib/auth";
 import { searchGames } from "@/app/games/actions";
-import { AuthButton } from "../components/AuthButton";
 import { SearchBox } from "../components/SearchBox";
 import { GameCard } from "../components/GameCard";
 
@@ -13,7 +11,6 @@ export default async function SearchPage({
   const params = await searchParams;
   const rawQuery = Array.isArray(params.q) ? params.q[0] : params.q;
   const query = rawQuery?.trim() || "";
-  const user = await getUser();
   const results = query ? await searchGames(query) : [];
 
   return (
@@ -38,7 +35,6 @@ export default async function SearchPage({
           </div>
           <div className="flex items-center gap-3">
             <SearchBox />
-            <AuthButton user={user} />
           </div>
         </div>
       </header>
@@ -59,7 +55,7 @@ export default async function SearchPage({
             {results.length > 0 ? (
               <div className="flex flex-wrap gap-4">
                 {results.map((game) => (
-                  <GameCard key={game.id} game={game} user={user} />
+                  <GameCard key={game.id} game={game} />
                 ))}
               </div>
             ) : (
