@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 
 export const metadata: Metadata = {
   title: "MakeCode Arcade Extensions",
@@ -13,16 +14,26 @@ export default function ExtensionsPage() {
         A curated, student-friendly documentation set for community-made MakeCode Arcade extensions.
       </p>
       <div className="border-4 border-makecode-yellow bg-makecode-blue p-6 shadow-[4px_4px_0_#000000]">
-        <p className="font-sans text-lg font-bold text-white">Coming soon</p>
-        <p className="mt-2 font-sans text-white">
-          First up: documentation for{" "}
+        <p className="font-sans text-lg font-bold text-white">First documented extension</p>
+        <ul className="mt-2 list-disc pl-6 font-sans text-white">
+          <li>
+            <Link
+              href="/extensions/jwunderl/arcade-sprite-util/distance-between"
+              className="font-bold text-makecode-yellow hover:underline"
+            >
+              arcade-sprite-util / distance between
+            </Link>
+          </li>
+        </ul>
+        <p className="mt-4 font-sans text-white">
+          Or open the extension directly in MakeCode Arcade:{" "}
           <a
             href="https://arcade.makecode.com/#import:github:jwunderl/arcade-sprite-util"
             target="_blank"
             rel="noopener noreferrer"
             className="font-bold text-makecode-yellow hover:underline"
           >
-            jwunderl/arcade-sprite-util
+            Import arcade-sprite-util
           </a>
           .
         </p>
