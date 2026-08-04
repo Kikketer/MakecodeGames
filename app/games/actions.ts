@@ -104,18 +104,33 @@ export async function listJams(): Promise<JamRow[]> {
 }
 
 type IdRow = { game_id: string };
-type GameIdRow = { id: string };
 
 export async function listGames({ category, jam, sort, limit = 10 }: ListParams): Promise<GameWithStats[]> {
+  const fetchAll = !category || category === "all";
   let gameIds: string[] = [];
+  let games: unknown[] = [];
+  let stats: unknown[] = [];
+  let posts: unknown[] = [];
 
-  if (category === "game-jams") {
+  if (fetchAll) {
+    const [{ data: gamesData }, { data: statsData }, { data: postsData }] = await Promise.all([
+      supabaseServer.from("games").select("*"),
+      supabaseServer.from("game_stats").select("game_id, clicks"),
+      supabaseServer
+        .from("game_forum_posts")
+        .select("game_id,forum_url,forum_topic_title,reply_count,view_count,post_cooked,reaction_count,link_clicks"),
+    ]);
+    games = gamesData || [];
+    stats = statsData || [];
+    posts = postsData || [];
+    gameIds = (games as { id: string }[]).map((g) => g.id);
+  } else if (category === "game-jams") {
     const query = jam
       ? supabaseServer.from("game_category_stats").select("game_id").eq("jam_id", jam)
       : supabaseServer.from("game_category_stats").select("game_id").not("jam_id", "is", null);
     const { data } = await query;
     gameIds = [...new Set(((data || []) as unknown as IdRow[]).map((d) => d.game_id))];
-  } else if (category && category !== "all") {
+  } else {
     const { data: cat } = await supabaseServer
       .from("forum_categories")
       .select("id")
@@ -128,21 +143,23 @@ export async function listGames({ category, jam, sort, limit = 10 }: ListParams)
       .select("game_id")
       .eq("forum_category_id", (cat as { id: number }).id);
     gameIds = [...new Set(((data || []) as unknown as IdRow[]).map((d) => d.game_id))];
-  } else {
-    const { data } = await supabaseServer.from("games").select("id");
-    gameIds = ((data || []) as unknown as GameIdRow[]).map((d) => d.id);
   }
 
   if (gameIds.length === 0) return [];
 
-  const [{ data: games }, { data: stats }, { data: posts }] = await Promise.all([
-    supabaseServer.from("games").select("*").in("id", gameIds),
-    supabaseServer.from("game_stats").select("game_id, clicks").in("game_id", gameIds),
-    supabaseServer
-      .from("game_forum_posts")
-      .select("game_id,forum_url,forum_topic_title,reply_count,view_count,post_cooked,reaction_count,link_clicks")
-      .in("game_id", gameIds),
-  ]);
+  if (!fetchAll) {
+    const [{ data: gamesData }, { data: statsData }, { data: postsData }] = await Promise.all([
+      supabaseServer.from("games").select("*").in("id", gameIds),
+      supabaseServer.from("game_stats").select("game_id, clicks").in("game_id", gameIds),
+      supabaseServer
+        .from("game_forum_posts")
+        .select("game_id,forum_url,forum_topic_title,reply_count,view_count,post_cooked,reaction_count,link_clicks")
+        .in("game_id", gameIds),
+    ]);
+    games = gamesData || [];
+    stats = statsData || [];
+    posts = postsData || [];
+  }
 
   const gameRows = (games || []) as unknown as GameWithStats[];
   const merged = mergeGameData(
