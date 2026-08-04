@@ -113,16 +113,8 @@ export async function listGames({ category, jam, sort, limit = 10 }: ListParams)
   let posts: unknown[] = [];
 
   if (fetchAll) {
-    const [{ data: gamesData }, { data: statsData }, { data: postsData }] = await Promise.all([
-      supabaseServer.from("games").select("*"),
-      supabaseServer.from("game_stats").select("game_id, clicks"),
-      supabaseServer
-        .from("game_forum_posts")
-        .select("game_id,forum_url,forum_topic_title,reply_count,view_count,post_cooked,reaction_count,link_clicks"),
-    ]);
-    games = gamesData || [];
-    stats = statsData || [];
-    posts = postsData || [];
+    const { data: dailyStats } = await supabaseServer.from("game_daily_stats").select("*");
+    games = (dailyStats || []) as unknown[];
     gameIds = (games as { id: string }[]).map((g) => g.id);
   } else if (category === "game-jams") {
     const query = jam
@@ -162,11 +154,13 @@ export async function listGames({ category, jam, sort, limit = 10 }: ListParams)
   }
 
   const gameRows = (games || []) as unknown as GameWithStats[];
-  const merged = mergeGameData(
-    gameRows,
-    (stats || []) as unknown as StatsRow[],
-    (posts || []) as unknown as PostRow[]
-  );
+  const merged = fetchAll
+    ? gameRows
+    : mergeGameData(
+        gameRows,
+        (stats || []) as unknown as StatsRow[],
+        (posts || []) as unknown as PostRow[]
+      );
 
   if (sort === "likes") {
     merged.sort((a, b) => b.likes - a.likes);

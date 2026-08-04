@@ -547,5 +547,6 @@ describe("ingestOnce", () => {
     await ingestOnce();
 
     expect(mockSupabase.rpc).toHaveBeenCalledWith("snapshot_game_stats");
+    expect(mockSupabase.rpc).toHaveBeenCalledWith("refresh_game_daily_stats");
   });
 });

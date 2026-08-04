@@ -42,6 +42,12 @@ const responses = {
       { game_id: "g2", forum_url: "https://forum.makecode.com/t/g2", reply_count: 0, view_count: 1, post_cooked: null, reaction_count: 5, link_clicks: 1 },
     ],
   },
+  game_daily_stats: {
+    data: [
+      { id: "g1", first_seen_at: "2026-08-01T00:00:00Z", likes: 10, clicks: 2, link_clicks: 4, plays: 6, forum_url: "https://forum.makecode.com/t/g1", forum_topic_title: null, replies: 3, views: 5, post_cooked: null },
+      { id: "g2", first_seen_at: "2026-08-02T00:00:00Z", likes: 5, clicks: 0, link_clicks: 1, plays: 1, forum_url: "https://forum.makecode.com/t/g2", forum_topic_title: null, replies: 0, views: 1, post_cooked: null },
+    ],
+  },
   game_stats_snapshots: {
     data: [],
   },

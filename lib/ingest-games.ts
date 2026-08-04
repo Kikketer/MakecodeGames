@@ -703,6 +703,14 @@ export async function ingestOnce(): Promise<IngestResult> {
     result.errors.push(`snapshot failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 
+  try {
+    const { error } = await supabaseServer.rpc("refresh_game_daily_stats");
+    if (error) throw error;
+  } catch (error) {
+    console.error("Failed to refresh game daily stats:", error);
+    result.errors.push(`refresh daily stats failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
   await supabaseServer.from("ingest_log").insert({
     started_at: startedAt,
     finished_at: new Date().toISOString(),
