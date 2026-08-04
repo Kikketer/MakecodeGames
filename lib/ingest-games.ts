@@ -422,7 +422,7 @@ async function ingestTopic(
         }
       }
     } catch (e) {
-      errors.push(String(e));
+      errors.push(e instanceof Error ? e.message : String(e));
     }
   });
 
@@ -433,7 +433,7 @@ async function ingestTopic(
     try {
       await refreshSinglePostReactions(forumPostId);
     } catch (e) {
-      errors.push(String(e));
+      errors.push(e instanceof Error ? e.message : String(e));
     }
   });
 
@@ -542,7 +542,7 @@ async function backfillTopic(
         }
       }
     } catch (e) {
-      errors.push(String(e));
+      errors.push(e instanceof Error ? e.message : String(e));
     }
   });
 
