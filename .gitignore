@@ -42,5 +42,5 @@ yarn-error.log*
 next-env.d.ts
 
 # local backfill artifacts
-backfill.log
+backfill.log*
 .backfill-checkpoint.json
