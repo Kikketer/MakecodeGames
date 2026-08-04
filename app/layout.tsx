@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { Footer } from "./components/Footer";
 
 export const metadata: Metadata = {
   title: "MakeCode Games!",
@@ -15,6 +16,7 @@ export default function RootLayout({
     <html lang="en" className="h-full antialiased">
       <body className="min-h-full flex flex-col bg-background text-foreground font-sans">
         {children}
+        <Footer />
       </body>
     </html>
   );

@@ -2,6 +2,7 @@ import { supabaseServer } from "@/lib/supabase-server";
 
 const FORUM_BASE = "https://forum.makecode.com";
 const MAKECODE_BASE = "https://arcade.makecode.com";
+const CONCURRENCY_LIMIT = 5;
 
 export type IngestResult = {
   jams: number;
@@ -32,7 +33,12 @@ type DiscoursePost = {
   reaction_users_count?: number;
 };
 
-type TopicPage = DiscourseTopic & { post_stream: { posts: DiscoursePost[] } };
+type TopicPage = DiscourseTopic & {
+  post_stream: { posts: DiscoursePost[] };
+  details?: {
+    links?: { url: string; clicks: number }[];
+  };
+};
 
 type MakeCodeMeta = {
   id: string;
@@ -70,10 +76,20 @@ async function getCategories(): Promise<CategoryMap> {
 }
 
 async function fetchJson<T>(url: string): Promise<T | null> {
-  const res = await fetch(url, {
-    headers: { Accept: "application/json" },
-  });
-  return res.ok ? ((await res.json()) as T) : null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const res = await fetch(url, {
+      headers: { Accept: "application/json" },
+    });
+    if (res.ok) return (await res.json()) as T;
+    if (res.status === 429) {
+      const delay = (attempt + 1) * 2000;
+      console.warn(`Rate limited on ${url}, waiting ${delay}ms...`);
+      await sleep(delay);
+      continue;
+    }
+    return null;
+  }
+  return null;
 }
 
 function extractShareUrls(cooked: string): string[] {
@@ -150,12 +166,14 @@ async function upsertForumPost(
   post: DiscoursePost,
   topicId: number,
   topicSlug: string,
+  topicTitle: string,
   categoryId: number,
   categoryName: string,
   jamId: string | undefined,
   replyCount: number,
   viewCount: number,
-  reactionCount: number
+  reactionCount: number,
+  linkClicks: number
 ) {
   const forumUrl = `${FORUM_BASE}/t/${topicSlug}/${topicId}/${post.post_number}`;
   const now = new Date().toISOString();
@@ -165,6 +183,7 @@ async function upsertForumPost(
       forum_topic_id: topicId,
       forum_post_id: post.id,
       forum_url: forumUrl,
+      forum_topic_title: topicTitle,
       forum_category_id: categoryId,
       forum_category_name: categoryName,
       jam_id: jamId || null,
@@ -173,7 +192,9 @@ async function upsertForumPost(
       view_count: viewCount,
       post_cooked: post.cooked,
       reaction_count: reactionCount,
+      link_clicks: linkClicks,
       reaction_refreshed_at: now,
+      last_parsed_at: now,
     },
     { onConflict: "game_id, forum_topic_id, forum_post_id" }
   );
@@ -213,7 +234,8 @@ export async function ingestPost(
   topic: DiscourseTopic,
   categoryMap: CategoryMap,
   jamId?: string,
-  reactionCount?: number
+  reactionCount?: number,
+  linkClicks?: number
 ): Promise<string | null> {
   const urlId = shareUrlToId(shareUrl);
   const meta = await normalizeMakeCode(urlId);
@@ -226,33 +248,255 @@ export async function ingestPost(
     post,
     topic.id,
     `t-${topic.id}`,
+    topic.title,
     topic.category_id,
     categoryName,
     jamId,
     topic.posts_count || 0,
     topic.views || 0,
-    reactionCount ?? (post.reaction_users_count ?? 0)
+    reactionCount ?? (post.reaction_users_count ?? 0),
+    linkClicks ?? 0
   );
   return gameId;
 }
 
-async function refreshPostReactions(post: DiscoursePost, topicId: number) {
-  const count = post.reaction_users_count ?? 0;
+async function refreshPostReactionsFromPost(
+  post: DiscoursePost,
+  topicId: number,
+  topicTitle: string,
+  linkClicks?: Map<string, number>
+) {
+  const urls = extractShareUrls(post.cooked);
+  const clicks = urls.length ? (linkClicks?.get(urls[0]) ?? 0) : 0;
+  const update: Record<string, unknown> = {
+    reaction_count: post.reaction_users_count ?? 0,
+    reaction_refreshed_at: new Date().toISOString(),
+    forum_topic_title: topicTitle,
+  };
+  if (clicks > 0) {
+    update.link_clicks = clicks;
+  }
   const { error } = await supabaseServer
     .from("game_forum_posts")
-    .update({
-      reaction_count: count,
-      reaction_refreshed_at: new Date().toISOString(),
-    })
+    .update(update)
     .eq("forum_topic_id", topicId)
     .eq("forum_post_id", post.id);
   if (error) throw error;
 }
 
-async function fetchAllTopicPosts(topicId: number): Promise<{ topic: DiscourseTopic | null; posts: DiscoursePost[] }> {
-  const first = await fetchJson<TopicPage>(`${FORUM_BASE}/t/${topicId}.json`);
-  if (!first) return { topic: null, posts: [] };
+async function refreshKnownPostMetadata(
+  post: DiscoursePost,
+  topic: DiscourseTopic,
+  linkClicks: Map<string, number>
+) {
+  const urls = extractShareUrls(post.cooked);
+  const clicks = urls.length ? (linkClicks.get(urls[0]) ?? 0) : 0;
+  const { error } = await supabaseServer
+    .from("game_forum_posts")
+    .update({
+      reaction_count: post.reaction_users_count ?? 0,
+      link_clicks: clicks,
+      forum_topic_title: topic.title,
+      reaction_refreshed_at: new Date().toISOString(),
+    })
+    .eq("forum_topic_id", topic.id)
+    .eq("forum_post_id", post.id);
+  if (error) throw error;
+}
 
+async function refreshSinglePostReactions(forumPostId: number) {
+  const post = await fetchJson<DiscoursePost>(`${FORUM_BASE}/posts/${forumPostId}.json`);
+  if (!post) return;
+
+  const { error } = await supabaseServer
+    .from("game_forum_posts")
+    .update({
+      reaction_count: post.reaction_users_count ?? 0,
+      reaction_refreshed_at: new Date().toISOString(),
+    })
+    .eq("forum_post_id", forumPostId);
+  if (error) throw error;
+}
+
+function buildLinkClicksMap(page: TopicPage | null): Map<string, number> {
+  const map = new Map<string, number>();
+  if (!page?.details?.links) return map;
+  for (const link of page.details.links) {
+    map.set(link.url, link.clicks);
+  }
+  return map;
+}
+
+async function fetchRecentTopicPosts(
+  topicId: number,
+  cutoff: Date,
+  firstPage?: TopicPage
+): Promise<{ posts: DiscoursePost[]; linkClicks: Map<string, number> }> {
+  const first = firstPage || (await fetchJson<TopicPage>(`${FORUM_BASE}/t/${topicId}.json`));
+  if (!first) return { posts: [], linkClicks: new Map() };
+
+  const linkClicks = buildLinkClicksMap(first);
+  const perPage = first.post_stream.posts.length || 20;
+  const totalPages = Math.ceil(first.posts_count / perPage);
+  const posts: DiscoursePost[] = [];
+
+  for (let page = totalPages; page >= 1; page--) {
+    const pageData = page === 1 ? first : await fetchJson<TopicPage>(`${FORUM_BASE}/t/${topicId}.json?page=${page}`);
+    if (!pageData) continue;
+
+    const pagePosts = pageData.post_stream.posts;
+    const newer = pagePosts.filter((p) => p.created_at && new Date(p.created_at) >= cutoff);
+    posts.push(...newer);
+
+    const oldestOnPage = pagePosts[0];
+    if (oldestOnPage?.created_at && new Date(oldestOnPage.created_at) < cutoff) break;
+  }
+
+  return { posts, linkClicks };
+}
+
+async function getKnownPostIds(topicId: number): Promise<Set<number>> {
+  const { data, error } = await supabaseServer
+    .from("game_forum_posts")
+    .select("forum_post_id")
+    .eq("forum_topic_id", topicId);
+  if (error) throw error;
+  return new Set((data || []).map((r) => r.forum_post_id as number));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function batchWithDelay<T>(
+  items: T[],
+  batchSize: number,
+  delayMs: number,
+  fn: (item: T) => Promise<void>
+) {
+  for (let i = 0; i < items.length; i += batchSize) {
+    const batch = items.slice(i, i + batchSize);
+    const results = await Promise.allSettled(batch.map(fn));
+    const rejected = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (rejected.length) throw rejected[0].reason;
+    if (i + batchSize < items.length && delayMs > 0) {
+      await sleep(delayMs);
+    }
+  }
+}
+
+type IngestTopicOptions = {
+  jamId?: string;
+  skipFirstPost?: boolean;
+  cutoff?: Date;
+  firstPage?: TopicPage;
+  delayMs?: number;
+};
+
+async function ingestTopic(
+  topic: DiscourseTopic,
+  categoryMap: CategoryMap,
+  options: IngestTopicOptions = {}
+): Promise<{ games: number; errors: string[] }> {
+  const effectiveCutoff = options.cutoff || new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+  const delayMs = options.delayMs ?? 100;
+  const [knownIds, { posts: recentPosts, linkClicks }] = await Promise.all([
+    getKnownPostIds(topic.id),
+    fetchRecentTopicPosts(topic.id, effectiveCutoff, options.firstPage),
+  ]);
+
+  const errors: string[] = [];
+  let games = 0;
+
+  await batchWithDelay(recentPosts, CONCURRENCY_LIMIT, delayMs, async (post) => {
+    if (options.skipFirstPost && post.post_number === 1) return;
+
+    try {
+      if (knownIds.has(post.id)) {
+        await refreshPostReactionsFromPost(post, topic.id, topic.title, linkClicks);
+      } else {
+        const urls = extractShareUrls(post.cooked);
+        for (const url of urls) {
+          const gameId = await ingestPost(url, post, topic, categoryMap, options.jamId, undefined, linkClicks.get(url));
+          if (gameId) games++;
+        }
+      }
+    } catch (e) {
+      errors.push(e instanceof Error ? e.message : String(e));
+    }
+  });
+
+  const recentIds = new Set(recentPosts.map((p) => p.id));
+  const historicalIds = [...knownIds].filter((id) => !recentIds.has(id));
+
+  await batchWithDelay(historicalIds, CONCURRENCY_LIMIT, delayMs, async (forumPostId) => {
+    try {
+      await refreshSinglePostReactions(forumPostId);
+    } catch (e) {
+      errors.push(e instanceof Error ? e.message : String(e));
+    }
+  });
+
+  return { games, errors };
+}
+
+export async function ingestJamTopic(
+  topicId: number,
+  lastIngestAt?: Date,
+  delayMs = 100
+): Promise<{ games: number; errors: string[] }> {
+  const categoryMap = await getCategories();
+  const first = await fetchJson<TopicPage>(`${FORUM_BASE}/t/${topicId}.json`);
+  if (!first) return { games: 0, errors: [`topic ${topicId} not found`] };
+
+  const topic: DiscourseTopic = { ...first, id: topicId };
+  const jam = await upsertJam(topic);
+  const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+  const cutoff = lastIngestAt ? new Date(lastIngestAt.getTime() - 24 * 60 * 60 * 1000) : twoDaysAgo;
+
+  return ingestTopic(topic, categoryMap, { jamId: jam, skipFirstPost: true, cutoff, firstPage: first, delayMs });
+}
+
+export async function ingestCategoryTopics(
+  categoryId: number,
+  limit = 20,
+  lastIngestAt?: Date,
+  delayMs = 100
+): Promise<{ games: number; errors: string[] }> {
+  const category = await fetchJson<{ topic_list: { topics: DiscourseTopic[] } }>(
+    `${FORUM_BASE}/c/${categoryId}.json`
+  );
+  if (!category) return { games: 0, errors: [`category ${categoryId} not found`] };
+
+  const categoryMap = await getCategories();
+  const errors: string[] = [];
+  let games = 0;
+
+  const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+  const cutoff = lastIngestAt ? new Date(lastIngestAt.getTime() - 24 * 60 * 60 * 1000) : twoDaysAgo;
+
+  const topics = category.topic_list.topics
+    .filter((t) => {
+      if (!lastIngestAt) return true;
+      const bumpedAt = t.bumped_at ? new Date(t.bumped_at) : null;
+      return bumpedAt && bumpedAt >= twoDaysAgo;
+    })
+    .slice(0, limit);
+
+  for (const topic of topics) {
+    const result = await ingestTopic(topic, categoryMap, { cutoff, delayMs });
+    games += result.games;
+    errors.push(...result.errors);
+  }
+
+  return { games, errors };
+}
+
+async function fetchAllTopicPosts(topicId: number): Promise<{ topic: DiscourseTopic | null; posts: DiscoursePost[]; linkClicks: Map<string, number> }> {
+  const first = await fetchJson<TopicPage>(`${FORUM_BASE}/t/${topicId}.json`);
+  if (!first) return { topic: null, posts: [], linkClicks: new Map() };
+
+  const linkClicks = buildLinkClicksMap(first);
   const posts: DiscoursePost[] = [...first.post_stream.posts];
   const perPage = first.post_stream.posts.length || 20;
   const pages = Math.ceil(first.posts_count / perPage);
@@ -264,84 +508,167 @@ async function fetchAllTopicPosts(topicId: number): Promise<{ topic: DiscourseTo
   }
 
   const topic: DiscourseTopic = { ...first, id: topicId };
-  return { topic, posts };
+  return { topic, posts, linkClicks };
 }
 
-export async function ingestJamTopic(
-  topicId: number,
-  lastIngestAt?: Date
-): Promise<{ games: number; errors: string[] }> {
-  const { topic, posts } = await fetchAllTopicPosts(topicId);
-  if (!topic) return { games: 0, errors: [`topic ${topicId} not found`] };
+type BackfillTopicOptions = {
+  jamId?: string;
+  skipFirstPost?: boolean;
+  delayMs?: number;
+};
 
-  const categoryMap = await getCategories();
-  const jam = await upsertJam(topic);
+async function backfillTopic(
+  topic: DiscourseTopic,
+  categoryMap: CategoryMap,
+  options: BackfillTopicOptions = {}
+): Promise<{ games: number; errors: string[] }> {
+  const delayMs = options.delayMs ?? 1000;
+  const knownIds = await getKnownPostIds(topic.id);
+  const { posts, linkClicks } = await fetchAllTopicPosts(topic.id);
   const errors: string[] = [];
   let games = 0;
 
-  for (const post of posts) {
-    if (post.post_number === 1) continue;
+  await batchWithDelay(posts, CONCURRENCY_LIMIT, delayMs, async (post) => {
+    if (options.skipFirstPost && post.post_number === 1) return;
+
     try {
-      if (!lastIngestAt || (post.created_at && new Date(post.created_at) >= lastIngestAt)) {
+      if (knownIds.has(post.id)) {
+        await refreshKnownPostMetadata(post, topic, linkClicks);
+      } else {
         const urls = extractShareUrls(post.cooked);
         for (const url of urls) {
-          const gameId = await ingestPost(url, post, topic, categoryMap, jam);
+          const gameId = await ingestPost(url, post, topic, categoryMap, options.jamId, undefined, linkClicks.get(url));
           if (gameId) games++;
         }
-      } else {
-        await refreshPostReactions(post, topic.id);
       }
     } catch (e) {
-      errors.push(String(e));
+      errors.push(e instanceof Error ? e.message : String(e));
+    }
+  });
+
+  return { games, errors };
+}
+
+export async function backfillJamTopic(
+  topicId: number,
+  delayMs = 1000
+): Promise<{ games: number; errors: string[] }> {
+  const categoryMap = await getCategories();
+  const first = await fetchJson<TopicPage>(`${FORUM_BASE}/t/${topicId}.json`);
+  if (!first) return { games: 0, errors: [`topic ${topicId} not found`] };
+
+  const topic: DiscourseTopic = { ...first, id: topicId };
+  const jam = await upsertJam(topic);
+
+  return backfillTopic(topic, categoryMap, { jamId: jam, skipFirstPost: true, delayMs });
+}
+
+type BackfillCategoryOptions = {
+  limit?: number;
+  since?: Date;
+  delayMs?: number;
+  topicDelayMs?: number;
+  listDelayMs?: number;
+  skipTopicIds?: Set<number>;
+  onTopicStart?: (topic: DiscourseTopic, index: number, total: number) => void;
+  onTopicCompleted?: (topic: DiscourseTopic, index: number, total: number) => void;
+};
+
+export async function backfillCategoryTopics(
+  categoryId: number,
+  options: BackfillCategoryOptions = {}
+): Promise<{ games: number; errors: string[] }> {
+  const limit = options.limit ?? 500;
+  const since = options.since;
+  const delayMs = options.delayMs ?? 1000;
+  const topicDelayMs = options.topicDelayMs ?? 0;
+  const listDelayMs = options.listDelayMs ?? 1000;
+
+  const topics: DiscourseTopic[] = [];
+  let page = 0;
+  while (topics.length < limit) {
+    const url = page === 0 ? `${FORUM_BASE}/c/${categoryId}.json` : `${FORUM_BASE}/c/${categoryId}.json?page=${page}`;
+    const category = await fetchJson<{ topic_list: { topics: DiscourseTopic[] } }>(url);
+    if (!category || !category.topic_list.topics.length) break;
+
+    const pageTopics = category.topic_list.topics;
+    topics.push(...pageTopics);
+
+    const allOld = since && pageTopics.every((t) => !t.bumped_at || new Date(t.bumped_at) < since);
+    if (allOld) break;
+
+    if (pageTopics.length < 30) break;
+    page++;
+    if (listDelayMs > 0) await sleep(listDelayMs);
+  }
+
+  const categoryMap = await getCategories();
+  const errors: string[] = [];
+  let games = 0;
+
+  const skipTopicIds = options.skipTopicIds || new Set<number>();
+  const filtered = topics
+    .filter((t) => !skipTopicIds.has(t.id))
+    .filter((t) => !since || (t.bumped_at && new Date(t.bumped_at) >= since))
+    .slice(0, limit);
+
+  for (let i = 0; i < filtered.length; i++) {
+    const topic = filtered[i];
+    options.onTopicStart?.(topic, i, filtered.length);
+    const result = await backfillTopic(topic, categoryMap, { delayMs });
+    games += result.games;
+    errors.push(...result.errors);
+    options.onTopicCompleted?.(topic, i, filtered.length);
+    if (topicDelayMs > 0 && i < filtered.length - 1) {
+      await sleep(topicDelayMs);
     }
   }
 
   return { games, errors };
 }
 
-export async function ingestCategoryTopics(
-  categoryId: number,
-  limit = 10,
-  lastIngestAt?: Date
-): Promise<{ games: number; errors: string[] }> {
-  const category = await fetchJson<{ topic_list: { topics: DiscourseTopic[] } }>(
-    `${FORUM_BASE}/c/${categoryId}.json`
-  );
-  if (!category) return { games: 0, errors: [`category ${categoryId} not found`] };
+export async function backfillAll(
+  options: {
+    since?: Date;
+    categoryDelayMs?: number;
+    categoryTopicDelayMs?: number;
+    jamDelayMs?: number;
+    skipTopicIds?: Set<number>;
+    onProgress?: (message: string) => void;
+    onTopicCompleted?: (topic: DiscourseTopic, index: number, total: number) => void;
+  } = {}
+): Promise<IngestResult> {
+  const result: IngestResult = { jams: 0, games: 0, posts: 0, errors: [] };
+  const log = options.onProgress || (() => {});
 
-  const categoryMap = await getCategories();
-  const errors: string[] = [];
-  let games = 0;
+  log("Backfilling jam topic 44801...");
+  const jam = await backfillJamTopic(44801, options.jamDelayMs ?? 1000);
+  result.jams = 1;
+  result.games += jam.games;
+  result.errors.push(...jam.errors);
+  log(`Jam topic done: ${jam.games} games, ${jam.errors.length} errors`);
 
-  const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const sinceText = options.since ? options.since.toISOString() : "all time";
+  log(`Backfilling category 5 topics since ${sinceText}...`);
+  const cat = await backfillCategoryTopics(5, {
+    since: options.since,
+    delayMs: options.categoryDelayMs ?? 1000,
+    topicDelayMs: options.categoryTopicDelayMs ?? 0,
+    listDelayMs: options.categoryDelayMs ?? 1000,
+    skipTopicIds: options.skipTopicIds,
+    onTopicStart: (topic, idx, total) => {
+      log(`[${idx + 1}/${total}] ${topic.title} — ${topic.posts_count} posts`);
+    },
+    onTopicCompleted: options.onTopicCompleted,
+  });
+  result.games += cat.games;
+  result.errors.push(...cat.errors);
+  log(`Category 5 done: ${cat.games} games, ${cat.errors.length} errors`);
 
-  for (const topic of category.topic_list.topics.slice(0, limit)) {
-    if (lastIngestAt) {
-      const bumpedAt = topic.bumped_at ? new Date(topic.bumped_at) : null;
-      if (!bumpedAt || bumpedAt < oneDayAgo) continue;
-    }
+  const { count } = await supabaseServer.from("game_forum_posts").select("*", { count: "exact", head: true });
+  result.posts = count || 0;
 
-    const { topic: fullTopic, posts } = await fetchAllTopicPosts(topic.id);
-    if (!fullTopic) continue;
-
-    for (const post of posts) {
-      try {
-        if (!lastIngestAt || (post.created_at && new Date(post.created_at) >= lastIngestAt)) {
-          const urls = extractShareUrls(post.cooked);
-          for (const url of urls) {
-            const gameId = await ingestPost(url, post, fullTopic, categoryMap);
-            if (gameId) games++;
-          }
-        } else {
-          await refreshPostReactions(post, fullTopic.id);
-        }
-      } catch (e) {
-        errors.push(String(e));
-      }
-    }
-  }
-
-  return { games, errors };
+  return result;
 }
 
 export async function ingestOnce(): Promise<IngestResult> {
@@ -361,7 +688,7 @@ export async function ingestOnce(): Promise<IngestResult> {
   result.games += jam.games;
   result.errors.push(...jam.errors);
 
-  const cat = await ingestCategoryTopics(5, 10, lastIngestAt);
+  const cat = await ingestCategoryTopics(5, 20, lastIngestAt);
   result.games += cat.games;
   result.errors.push(...cat.errors);
 

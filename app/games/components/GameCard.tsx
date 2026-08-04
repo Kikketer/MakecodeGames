@@ -37,7 +37,7 @@ export function GameCard({ game }: { game: GameWithStats }) {
           {game.title}
         </h3>
         <p className="font-sans text-sm text-makecode-brown">{game.author_username || "Anonymous"}</p>
-        <div className="mt-2 flex items-center justify-between">
+        <div className="mt-2 flex flex-col items-end gap-1">
           <LikeControl game={game} />
           {game.forum_url ? (
             <a
@@ -45,13 +45,13 @@ export function GameCard({ game }: { game: GameWithStats }) {
               target="_blank"
               rel="noopener noreferrer"
               aria-label={`Visit the forum post for ${game.title}`}
-              title={`Visit the forum post for ${game.title}`}
-              className="font-sans text-sm font-bold text-makecode-blue hover:underline"
+              title={game.forum_topic_title || `Visit the forum post for ${game.title}`}
+              className="max-w-full truncate text-right font-sans text-sm font-bold text-makecode-blue hover:underline"
             >
-              Forum ({game.replies})
+              {game.forum_topic_title || "Forum"}
             </a>
           ) : (
-            <span className="font-sans text-sm font-bold text-makecode-brown">Forum ({game.replies})</span>
+            <span className="font-sans text-sm font-bold text-makecode-brown">Forum</span>
           )}
         </div>
       </div>
