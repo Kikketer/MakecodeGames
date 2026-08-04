@@ -1,24 +1,21 @@
-import { chromium } from "playwright";
+import { chromium, type Browser } from "playwright";
 import { mkdir, writeFile } from "fs/promises";
 import { dirname } from "path";
+import { extensions } from "../content/extensions";
+import type { ExtensionDoc, ExtensionTool } from "../content/extensions/types";
 
-function imageString(fill: string) {
-  const row = Array(16).fill(fill).join(" ");
-  return Array(16).fill(row).join("\n");
-}
+const RENDERER_URL = "https://arcade.makecode.com/--docs?render=1";
+const TARGET_ORIGIN = "https://arcade.makecode.com";
 
-function renderHtml(code: string, packageSpec: string): string {
-  const rendererUrl = "https://arcade.makecode.com/--docs?render=1";
-  const targetOrigin = "https://arcade.makecode.com";
-
+function renderHtml(code: string, packageSpec: string, id: string): string {
   return `<!DOCTYPE html>
 <html>
   <body>
     <script>
       const code = ${JSON.stringify(code)};
       const packageSpec = ${JSON.stringify(packageSpec)};
-      const rendererUrl = ${JSON.stringify(rendererUrl)};
-      const targetOrigin = ${JSON.stringify(targetOrigin)};
+      const rendererUrl = ${JSON.stringify(RENDERER_URL)};
+      const targetOrigin = ${JSON.stringify(TARGET_ORIGIN)};
 
       const iframe = document.createElement("iframe");
       iframe.src = rendererUrl;
@@ -30,7 +27,7 @@ function renderHtml(code: string, packageSpec: string): string {
 
       const timeout = setTimeout(() => {
         window.__renderError = "Timed out waiting for renderblocks response";
-      }, 60000);
+      }, 30000);
 
       function send() {
         if (!iframe.contentWindow) {
@@ -40,7 +37,7 @@ function renderHtml(code: string, packageSpec: string): string {
         iframe.contentWindow.postMessage(
           {
             type: "renderblocks",
-            id: "distance-between",
+            id: ${JSON.stringify(id)},
             code,
             options: { package: packageSpec },
           },
@@ -71,28 +68,19 @@ function renderHtml(code: string, packageSpec: string): string {
 </html>`;
 }
 
-async function main() {
-  const owner = "jwunderl";
-  const repo = "arcade-sprite-util";
-  const slug = "distance-between";
-  const outPath = `public/extensions/${owner}/${repo}/${slug}.svg`;
+async function renderTool(browser: Browser, extension: ExtensionDoc, tool: ExtensionTool): Promise<boolean> {
+  const outPath = `public/extensions/${extension.owner}/${extension.repo}/${tool.slug}.svg`;
+  const packageSpec = `${extension.repo}=${extension.packageSlug}`;
 
-  const code = `let mySprite = sprites.create(img\`${imageString("1")}\`, SpriteKind.Player)
-let myEnemy = sprites.create(img\`${imageString("2")}\`, SpriteKind.Enemy)
-let distance = spriteutils.distanceBetween(mySprite, myEnemy)
-console.log(distance)`;
-
-  const packageSpec = `arcade-sprite-util=github:${owner}/${repo}`;
-
-  const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
-  await page.setContent(renderHtml(code, packageSpec));
 
   try {
+    await page.setContent(renderHtml(tool.example, packageSpec, tool.slug));
+
     await page.waitForFunction(
       'typeof window.__renderedSvg === "string" || typeof window.__renderError === "string"',
-      { timeout: 65000 },
+      { timeout: 35000 },
     );
 
     const result = (await page.evaluate(
@@ -100,12 +88,33 @@ console.log(distance)`;
     )) as { svg?: string; error?: string };
 
     if (result.error || !result.svg) {
-      throw new Error(result.error || "No SVG returned");
+      console.warn(`Skipped ${extension.repo}/${tool.slug}: ${result.error || "no SVG returned"}`);
+      return false;
     }
 
     await mkdir(dirname(outPath), { recursive: true });
     await writeFile(outPath, result.svg, "utf-8");
     console.log(`Wrote ${outPath}`);
+    return true;
+  } catch (err) {
+    console.warn(`Skipped ${extension.repo}/${tool.slug}:`, err instanceof Error ? err.message : err);
+    return false;
+  } finally {
+    await context.close();
+  }
+}
+
+async function main() {
+  const onlySlug = process.argv[2];
+  const browser = await chromium.launch({ headless: true });
+
+  try {
+    for (const extension of extensions) {
+      for (const tool of extension.tools) {
+        if (onlySlug && tool.slug !== onlySlug) continue;
+        await renderTool(browser, extension, tool);
+      }
+    }
   } finally {
     await browser.close();
   }
