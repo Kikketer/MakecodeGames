@@ -9,3 +9,9 @@ This version has breaking changes — APIs, conventions, and file structure may 
 
 All `supabase` CLI, SQL, and migration work in this repo must target only the `MakecodeGames` project (`wnrqogysflgnnoabljvw`). Do not link, query, or push to any other Supabase project or shared database.
 <!-- END:supabase-scope-guardrail -->
+
+<!-- BEGIN:loading-state-convention -->
+## Loading states for async server components
+
+For any async server component / route segment that awaits slow data, add a sibling `loading.tsx` file (Next.js App Router Suspense convention) rather than inventing a custom client-side spinner or loading-state pattern. This gives you instant fallback UI during both SSR streaming and client-side navigations. See `app/games/loading.tsx` and `app/games/components/ArcadeLoader.tsx` for the reference implementation.
+<!-- END:loading-state-convention -->
