@@ -32,8 +32,7 @@ export default async function GamesPage({
           <div>
             <h1 className="font-sans text-3xl font-bold text-white">MakeCode Games!</h1>
             <p className="mt-1 font-sans text-sm text-makecode-tan">
-              This is not affiliated with Microsoft, this is a fan-made site.{" "}
-              Visit{" "}
+              A fan-made community library of MakeCode Arcade games. Visit{" "}
               <a
                 href="https://arcade.makecode.com"
                 target="_blank"

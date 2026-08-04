@@ -20,7 +20,9 @@ export type GameWithStats = {
   last_seen_at: string;
   likes: number;
   clicks: number;
+  link_clicks: number;
   forum_url: string;
+  forum_topic_title: string | null;
   replies: number;
   views: number;
   post_cooked: string | null;
@@ -32,10 +34,12 @@ type StatsRow = { game_id: string; clicks: number };
 type PostRow = {
   game_id: string;
   forum_url: string;
+  forum_topic_title: string | null;
   reply_count: number;
   view_count: number;
   post_cooked: string | null;
   reaction_count: number;
+  link_clicks: number;
 };
 
 type ListParams = {
@@ -50,31 +54,36 @@ function mergeGameData(games: GameWithStats[], stats: StatsRow[], posts: PostRow
 
   const forumMap = new Map<
     string,
-    { url: string; replies: number; views: number; post_cooked: string | null; likes: number }
+    { url: string; topicTitle: string | null; replies: number; views: number; post_cooked: string | null; likes: number; link_clicks: number }
   >();
   posts.forEach((p) => {
     const existing = forumMap.get(p.game_id);
     if (!existing) {
       forumMap.set(p.game_id, {
         url: p.forum_url,
+        topicTitle: p.forum_topic_title,
         replies: p.reply_count || 0,
         views: p.view_count || 0,
         post_cooked: p.post_cooked,
         likes: p.reaction_count || 0,
+        link_clicks: p.link_clicks || 0,
       });
     } else {
       existing.likes += p.reaction_count || 0;
+      existing.link_clicks += p.link_clicks || 0;
     }
   });
 
   return games.map((g) => {
     const s = statsMap.get(g.id) || { clicks: 0 };
-    const p = forumMap.get(g.id) || { url: "", replies: 0, views: 0, post_cooked: null, likes: 0 };
+    const p = forumMap.get(g.id) || { url: "", topicTitle: null, replies: 0, views: 0, post_cooked: null, likes: 0, link_clicks: 0 };
     return {
       ...g,
       likes: p.likes,
       clicks: s.clicks,
+      link_clicks: p.link_clicks,
       forum_url: p.url,
+      forum_topic_title: p.topicTitle,
       replies: p.replies,
       views: p.views,
       post_cooked: p.post_cooked,
@@ -129,7 +138,7 @@ export async function listGames({ category, jam, sort, limit = 10 }: ListParams)
     supabaseServer.from("game_stats").select("game_id, clicks").in("game_id", gameIds),
     supabaseServer
       .from("game_forum_posts")
-      .select("game_id,forum_url,reply_count,view_count,post_cooked,reaction_count")
+      .select("game_id,forum_url,forum_topic_title,reply_count,view_count,post_cooked,reaction_count,link_clicks")
       .in("game_id", gameIds),
   ]);
 
@@ -148,8 +157,8 @@ export async function listGames({ category, jam, sort, limit = 10 }: ListParams)
     merged.sort((a, b) => {
       const ah = (Date.now() - new Date(a.first_seen_at).getTime()) / 3600000;
       const bh = (Date.now() - new Date(b.first_seen_at).getTime()) / 3600000;
-      const as = (a.likes + a.clicks) / Math.pow(ah + 2, 1.5);
-      const bs = (b.likes + b.clicks) / Math.pow(bh + 2, 1.5);
+      const as = (a.likes + a.clicks + a.link_clicks) / Math.pow(ah + 2, 1.5);
+      const bs = (b.likes + b.clicks + b.link_clicks) / Math.pow(bh + 2, 1.5);
       return bs - as;
     });
   }
@@ -175,7 +184,7 @@ export async function searchGames(query: string): Promise<GameWithStats[]> {
     supabaseServer.from("game_stats").select("game_id, clicks").in("game_id", gameIds),
     supabaseServer
       .from("game_forum_posts")
-      .select("game_id,forum_url,reply_count,view_count,post_cooked,reaction_count")
+      .select("game_id,forum_url,forum_topic_title,reply_count,view_count,post_cooked,reaction_count,link_clicks")
       .in("game_id", gameIds),
   ]);
 

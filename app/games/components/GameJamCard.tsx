@@ -30,10 +30,10 @@ export function GameJamCard({ game }: { game: GameWithStats }) {
               title={`Visit the forum post for ${game.title}`}
               className="font-sans text-sm font-bold text-makecode-blue hover:underline"
             >
-              Forum ({game.replies})
+              Post
             </a>
           ) : (
-            <span className="font-sans text-sm font-bold text-makecode-brown">Forum ({game.replies})</span>
+            <span className="font-sans text-sm font-bold text-makecode-brown">Post</span>
           )}
         </div>
       </div>
@@ -70,6 +70,7 @@ export function GameJamCard({ game }: { game: GameWithStats }) {
           <p className="flex-1 font-sans text-sm text-makecode-brown">No forum description available.</p>
         )}
       </div>
+
     </article>
   );
 }
