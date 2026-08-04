@@ -25,18 +25,23 @@ const baseGame = {
 };
 
 describe("PlayControl", () => {
-  it("renders the play count", () => {
+  it("renders the play count in a pill", () => {
     render(<PlayControl game={{ ...baseGame, plays: 42 }} />);
-    expect(screen.getByText("▶ 42")).not.toBeNull();
+    const pill = screen.getByLabelText("42 plays");
+    expect(pill).not.toBeNull();
+    expect(pill.textContent).toBe("42");
   });
 
   it("renders zero plays", () => {
     render(<PlayControl game={{ ...baseGame, plays: 0 }} />);
-    expect(screen.getByText("▶ 0")).not.toBeNull();
+    const pill = screen.getByLabelText("0 plays");
+    expect(pill).not.toBeNull();
+    expect(pill.textContent).toBe("0");
   });
 
-  it("exposes the count via aria-label", () => {
-    render(<PlayControl game={{ ...baseGame, plays: 7 }} />);
-    expect(screen.getByLabelText("7 plays")).not.toBeNull();
+  it("uses a rounded pill style", () => {
+    const { container } = render(<PlayControl game={{ ...baseGame, plays: 7 }} />);
+    const pill = container.querySelector("span");
+    expect(pill?.classList.contains("rounded-full")).toBe(true);
   });
 });
