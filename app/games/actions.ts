@@ -21,6 +21,7 @@ export type GameWithStats = {
   likes: number;
   clicks: number;
   link_clicks: number;
+  plays: number;
   forum_url: string;
   forum_topic_title: string | null;
   replies: number;
@@ -45,7 +46,7 @@ type PostRow = {
 type ListParams = {
   category?: string;
   jam?: string;
-  sort: "hot" | "likes" | "newest";
+  sort: "hot" | "likes" | "newest" | "trending";
   limit?: number;
 };
 
@@ -82,6 +83,7 @@ function mergeGameData(games: GameWithStats[], stats: StatsRow[], posts: PostRow
       likes: p.likes,
       clicks: s.clicks,
       link_clicks: p.link_clicks,
+      plays: s.clicks + p.link_clicks,
       forum_url: p.url,
       forum_topic_title: p.topicTitle,
       replies: p.replies,
@@ -153,12 +155,29 @@ export async function listGames({ category, jam, sort, limit = 10 }: ListParams)
     merged.sort((a, b) => b.likes - a.likes);
   } else if (sort === "newest") {
     merged.sort((a, b) => new Date(b.first_seen_at).getTime() - new Date(a.first_seen_at).getTime());
+  } else if (sort === "trending") {
+    const { data: snapshots } = await supabaseServer
+      .from("game_stats_snapshots")
+      .select("game_id, likes, plays")
+      .in("game_id", gameIds);
+
+    const snapshotMap = new Map(
+      (snapshots || []).map((s) => [s.game_id, { likes: s.likes || 0, plays: s.plays || 0 }])
+    );
+
+    merged.sort((a, b) => {
+      const sa = snapshotMap.get(a.id) || { likes: 0, plays: 0 };
+      const sb = snapshotMap.get(b.id) || { likes: 0, plays: 0 };
+      const da = (a.likes + a.plays) - (sa.likes + sa.plays);
+      const db = (b.likes + b.plays) - (sb.likes + sb.plays);
+      return db - da;
+    });
   } else {
     merged.sort((a, b) => {
       const ah = (Date.now() - new Date(a.first_seen_at).getTime()) / 3600000;
       const bh = (Date.now() - new Date(b.first_seen_at).getTime()) / 3600000;
-      const as = (a.likes + a.clicks + a.link_clicks) / Math.pow(ah + 2, 1.5);
-      const bs = (b.likes + b.clicks + b.link_clicks) / Math.pow(bh + 2, 1.5);
+      const as = (a.likes + a.plays) / Math.pow(ah + 2, 1.5);
+      const bs = (b.likes + b.plays) / Math.pow(bh + 2, 1.5);
       return bs - as;
     });
   }

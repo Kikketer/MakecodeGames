@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
-import { refreshGameReactions, ingestPost, ingestCategoryTopics, ingestJamTopic } from "./ingest-games";
+import { refreshGameReactions, ingestPost, ingestCategoryTopics, ingestJamTopic, ingestOnce } from "./ingest-games";
 
-const mockSupabase = vi.hoisted(() => ({ from: vi.fn() }));
+const mockSupabase = vi.hoisted(() => ({ from: vi.fn(), rpc: vi.fn() }));
 
 vi.mock("@/lib/supabase-server", () => ({ supabaseServer: mockSupabase }));
 
@@ -400,5 +400,152 @@ describe("ingestJamTopic", () => {
       "https://forum.makecode.com/t/44801.json?page=2",
     ]);
     expect(topicFetches).not.toContain("https://forum.makecode.com/t/44801.json?page=1");
+  });
+});
+
+describe("ingestOnce", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-08-04T12:00:00.000Z");
+    mockFetch = vi.fn();
+    vi.stubGlobal("fetch", mockFetch);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("calls snapshot_game_stats at the end of a successful run", async () => {
+    mockSupabase.rpc = vi.fn().mockResolvedValue({ error: null });
+
+    mockSupabase.from = vi.fn((table: string) => {
+      const calls: string[] = [];
+      const chain = {
+        select: (cols?: string) => {
+          calls.push(`select:${cols ?? ""}`);
+          return chain;
+        },
+        eq: () => { calls.push("eq"); return chain; },
+        in: () => { calls.push("in"); return chain; },
+        not: () => { calls.push("not"); return chain; },
+        is: () => { calls.push("is"); return chain; },
+        limit: () => { calls.push("limit"); return chain; },
+        order: () => { calls.push("order"); return chain; },
+        single: () => { calls.push("single"); return chain; },
+        insert: () => { calls.push("insert"); return chain; },
+        upsert: () => { calls.push("upsert"); return chain; },
+        update: () => { calls.push("update"); return chain; },
+        then: (resolve: (value: unknown) => void) => {
+          if (table === "ingest_log") {
+            if (calls.includes("single")) return resolve({ data: null, error: null });
+            if (calls.includes("insert")) return resolve({ error: null });
+            return resolve({ data: [], error: null });
+          }
+          if (table === "game_forum_posts" && calls.includes("select") && !calls.includes("single")) {
+            return resolve({ data: [], count: 0, error: null });
+          }
+          if (calls.includes("upsert") || calls.includes("update")) return resolve({ error: null });
+          if (calls.includes("insert") && calls.includes("single")) return resolve({ data: { id: "game-1" }, error: null });
+          if (calls.includes("single")) return resolve({ data: null, error: null });
+          return resolve({ data: [], error: null });
+        },
+      };
+      return chain;
+    });
+
+    mockFetch
+      .mockImplementationOnce(() =>
+        Promise.resolve(
+          jsonResponse({
+            categories: [
+              { id: 13, name: "Jams", slug: "jams" },
+              { id: 5, name: "Games", slug: "games" },
+            ],
+          })
+        )
+      )
+      .mockImplementationOnce(() =>
+        Promise.resolve(
+          jsonResponse({
+            id: 44801,
+            title: "Jam #1",
+            category_id: 13,
+            posts_count: 1,
+            views: 50,
+            post_stream: {
+              posts: [
+                {
+                  id: 1,
+                  post_number: 1,
+                  cooked: "<p>Welcome</p>",
+                  user_id: 1,
+                  username: "host",
+                  created_at: "2026-08-01T00:00:00.000Z",
+                  reaction_users_count: 0,
+                },
+              ],
+            },
+          })
+        )
+      )
+      .mockImplementationOnce(() =>
+        Promise.resolve(
+          jsonResponse({
+            topic_list: {
+              topics: [
+                {
+                  id: 100,
+                  title: "A game topic",
+                  posts_count: 1,
+                  bumped_at: "2026-08-01T00:00:00.000Z",
+                  category_id: 5,
+                  views: 10,
+                  created_at: "2026-08-01T00:00:00.000Z",
+                },
+              ],
+            },
+          })
+        )
+      )
+      .mockImplementationOnce(() =>
+        Promise.resolve(
+          jsonResponse({
+            categories: [
+              { id: 13, name: "Jams", slug: "jams" },
+              { id: 5, name: "Games", slug: "games" },
+            ],
+          })
+        )
+      )
+      .mockImplementationOnce(() =>
+        Promise.resolve(
+          jsonResponse({
+            id: 100,
+            title: "A game topic",
+            category_id: 5,
+            posts_count: 1,
+            views: 10,
+            post_stream: {
+              posts: [
+                {
+                  id: 10,
+                  post_number: 1,
+                  cooked: '<p><a href="https://arcade.makecode.com/12345">game</a></p>',
+                  user_id: 2,
+                  username: "player",
+                  created_at: "2026-08-01T00:00:00.000Z",
+                  reaction_users_count: 0,
+                },
+              ],
+            },
+          })
+        )
+      );
+
+    await ingestOnce();
+
+    expect(mockSupabase.rpc).toHaveBeenCalledWith("snapshot_game_stats");
   });
 });

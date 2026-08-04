@@ -695,6 +695,14 @@ export async function ingestOnce(): Promise<IngestResult> {
   const { count } = await supabaseServer.from("game_forum_posts").select("*", { count: "exact", head: true });
   result.posts = count || 0;
 
+  try {
+    const { error } = await supabaseServer.rpc("snapshot_game_stats");
+    if (error) throw error;
+  } catch (error) {
+    console.error("Failed to snapshot game stats:", error);
+    result.errors.push(`snapshot failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
   await supabaseServer.from("ingest_log").insert({
     started_at: startedAt,
     finished_at: new Date().toISOString(),
