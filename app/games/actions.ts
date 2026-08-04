@@ -21,6 +21,7 @@ export type GameWithStats = {
   likes: number;
   clicks: number;
   link_clicks: number;
+  plays: number;
   forum_url: string;
   forum_topic_title: string | null;
   replies: number;
@@ -45,7 +46,7 @@ type PostRow = {
 type ListParams = {
   category?: string;
   jam?: string;
-  sort: "hot" | "likes" | "newest";
+  sort: "hot" | "likes" | "newest" | "trending";
   limit?: number;
 };
 
@@ -82,6 +83,7 @@ function mergeGameData(games: GameWithStats[], stats: StatsRow[], posts: PostRow
       likes: p.likes,
       clicks: s.clicks,
       link_clicks: p.link_clicks,
+      plays: s.clicks + p.link_clicks,
       forum_url: p.url,
       forum_topic_title: p.topicTitle,
       replies: p.replies,
@@ -102,18 +104,25 @@ export async function listJams(): Promise<JamRow[]> {
 }
 
 type IdRow = { game_id: string };
-type GameIdRow = { id: string };
 
 export async function listGames({ category, jam, sort, limit = 10 }: ListParams): Promise<GameWithStats[]> {
+  const fetchAll = !category || category === "all";
   let gameIds: string[] = [];
+  let games: unknown[] = [];
+  let stats: unknown[] = [];
+  let posts: unknown[] = [];
 
-  if (category === "game-jams") {
+  if (fetchAll) {
+    const { data: dailyStats } = await supabaseServer.from("game_daily_stats").select("*");
+    games = (dailyStats || []) as unknown[];
+    gameIds = (games as { id: string }[]).map((g) => g.id);
+  } else if (category === "game-jams") {
     const query = jam
       ? supabaseServer.from("game_category_stats").select("game_id").eq("jam_id", jam)
       : supabaseServer.from("game_category_stats").select("game_id").not("jam_id", "is", null);
     const { data } = await query;
     gameIds = [...new Set(((data || []) as unknown as IdRow[]).map((d) => d.game_id))];
-  } else if (category && category !== "all") {
+  } else {
     const { data: cat } = await supabaseServer
       .from("forum_categories")
       .select("id")
@@ -126,39 +135,62 @@ export async function listGames({ category, jam, sort, limit = 10 }: ListParams)
       .select("game_id")
       .eq("forum_category_id", (cat as { id: number }).id);
     gameIds = [...new Set(((data || []) as unknown as IdRow[]).map((d) => d.game_id))];
-  } else {
-    const { data } = await supabaseServer.from("games").select("id");
-    gameIds = ((data || []) as unknown as GameIdRow[]).map((d) => d.id);
   }
 
   if (gameIds.length === 0) return [];
 
-  const [{ data: games }, { data: stats }, { data: posts }] = await Promise.all([
-    supabaseServer.from("games").select("*").in("id", gameIds),
-    supabaseServer.from("game_stats").select("game_id, clicks").in("game_id", gameIds),
-    supabaseServer
-      .from("game_forum_posts")
-      .select("game_id,forum_url,forum_topic_title,reply_count,view_count,post_cooked,reaction_count,link_clicks")
-      .in("game_id", gameIds),
-  ]);
+  if (!fetchAll) {
+    const [{ data: gamesData }, { data: statsData }, { data: postsData }] = await Promise.all([
+      supabaseServer.from("games").select("*").in("id", gameIds),
+      supabaseServer.from("game_stats").select("game_id, clicks").in("game_id", gameIds),
+      supabaseServer
+        .from("game_forum_posts")
+        .select("game_id,forum_url,forum_topic_title,reply_count,view_count,post_cooked,reaction_count,link_clicks")
+        .in("game_id", gameIds),
+    ]);
+    games = gamesData || [];
+    stats = statsData || [];
+    posts = postsData || [];
+  }
 
   const gameRows = (games || []) as unknown as GameWithStats[];
-  const merged = mergeGameData(
-    gameRows,
-    (stats || []) as unknown as StatsRow[],
-    (posts || []) as unknown as PostRow[]
-  );
+  const merged = fetchAll
+    ? gameRows
+    : mergeGameData(
+        gameRows,
+        (stats || []) as unknown as StatsRow[],
+        (posts || []) as unknown as PostRow[]
+      );
 
   if (sort === "likes") {
     merged.sort((a, b) => b.likes - a.likes);
   } else if (sort === "newest") {
     merged.sort((a, b) => new Date(b.first_seen_at).getTime() - new Date(a.first_seen_at).getTime());
+  } else if (sort === "trending") {
+    const { data: snapshots } = await supabaseServer
+      .from("game_stats_snapshots")
+      .select("game_id, likes, plays");
+
+    const gameIdSet = new Set(gameIds);
+    const snapshotMap = new Map(
+      (snapshots || [])
+        .filter((s) => gameIdSet.has(s.game_id))
+        .map((s) => [s.game_id, { likes: s.likes || 0, plays: s.plays || 0 }])
+    );
+
+    merged.sort((a, b) => {
+      const sa = snapshotMap.get(a.id) || { likes: 0, plays: 0 };
+      const sb = snapshotMap.get(b.id) || { likes: 0, plays: 0 };
+      const da = (a.likes + a.plays) - (sa.likes + sa.plays);
+      const db = (b.likes + b.plays) - (sb.likes + sb.plays);
+      return db - da;
+    });
   } else {
     merged.sort((a, b) => {
       const ah = (Date.now() - new Date(a.first_seen_at).getTime()) / 3600000;
       const bh = (Date.now() - new Date(b.first_seen_at).getTime()) / 3600000;
-      const as = (a.likes + a.clicks + a.link_clicks) / Math.pow(ah + 2, 1.5);
-      const bs = (b.likes + b.clicks + b.link_clicks) / Math.pow(bh + 2, 1.5);
+      const as = (a.likes + a.plays) / Math.pow(ah + 2, 1.5);
+      const bs = (b.likes + b.plays) / Math.pow(bh + 2, 1.5);
       return bs - as;
     });
   }

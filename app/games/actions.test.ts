@@ -38,9 +38,18 @@ const responses = {
   },
   game_forum_posts: {
     data: [
-      { game_id: "g1", forum_url: "https://forum.makecode.com/t/g1", reply_count: 3, view_count: 5, post_cooked: null, reaction_count: 10 },
-      { game_id: "g2", forum_url: "https://forum.makecode.com/t/g2", reply_count: 0, view_count: 1, post_cooked: null, reaction_count: 5 },
+      { game_id: "g1", forum_url: "https://forum.makecode.com/t/g1", reply_count: 3, view_count: 5, post_cooked: null, reaction_count: 10, link_clicks: 4 },
+      { game_id: "g2", forum_url: "https://forum.makecode.com/t/g2", reply_count: 0, view_count: 1, post_cooked: null, reaction_count: 5, link_clicks: 1 },
     ],
+  },
+  game_daily_stats: {
+    data: [
+      { id: "g1", first_seen_at: "2026-08-01T00:00:00Z", likes: 10, clicks: 2, link_clicks: 4, plays: 6, forum_url: "https://forum.makecode.com/t/g1", forum_topic_title: null, replies: 3, views: 5, post_cooked: null },
+      { id: "g2", first_seen_at: "2026-08-02T00:00:00Z", likes: 5, clicks: 0, link_clicks: 1, plays: 1, forum_url: "https://forum.makecode.com/t/g2", forum_topic_title: null, replies: 0, views: 1, post_cooked: null },
+    ],
+  },
+  game_stats_snapshots: {
+    data: [],
   },
   game_likes: {
     data: [{ game_id: "g1" }],
@@ -98,8 +107,34 @@ describe("listGames", () => {
     const g2 = result.find((g) => g.id === "g2");
     expect(g1?.likes).toBe(10);
     expect(g1?.clicks).toBe(2);
+    expect(g1?.link_clicks).toBe(4);
+    expect(g1?.plays).toBe(6);
     expect(g2?.likes).toBe(5);
     expect(g2?.clicks).toBe(0);
+    expect(g2?.link_clicks).toBe(1);
+    expect(g2?.plays).toBe(1);
+  });
+
+  it("sorts by trending delta from snapshots", async () => {
+    mockSupabase.from = vi.fn((table: string) =>
+      makeBuilder(table, {
+        ...responses,
+        game_stats_snapshots: {
+          data: [
+            { game_id: "g1", likes: 8, plays: 3 },
+            { game_id: "g2", likes: 5, plays: 0 },
+          ],
+        },
+      }[table])
+    );
+
+    const result = await listGames({ sort: "trending", limit: 10 });
+
+    expect(result.map((g) => g.id)).toEqual(["g1", "g2"]);
+    const g1 = result.find((g) => g.id === "g1");
+    const g2 = result.find((g) => g.id === "g2");
+    expect((g1?.likes ?? 0) + (g1?.plays ?? 0)).toBe(16);
+    expect((g2?.likes ?? 0) + (g2?.plays ?? 0)).toBe(6);
   });
 });
 
@@ -120,9 +155,9 @@ const searchResponses = {
   },
   game_forum_posts: {
     data: [
-      { game_id: "g1", forum_url: "https://forum.makecode.com/t/g1", reply_count: 1, view_count: 2, post_cooked: null, reaction_count: 5 },
-      { game_id: "g2", forum_url: "https://forum.makecode.com/t/g2", reply_count: 0, view_count: 1, post_cooked: null, reaction_count: 2 },
-      { game_id: "g3", forum_url: "", reply_count: 0, view_count: 0, post_cooked: null, reaction_count: 8 },
+      { game_id: "g1", forum_url: "https://forum.makecode.com/t/g1", reply_count: 1, view_count: 2, post_cooked: null, reaction_count: 5, link_clicks: 2 },
+      { game_id: "g2", forum_url: "https://forum.makecode.com/t/g2", reply_count: 0, view_count: 1, post_cooked: null, reaction_count: 2, link_clicks: 0 },
+      { game_id: "g3", forum_url: "", reply_count: 0, view_count: 0, post_cooked: null, reaction_count: 8, link_clicks: 3 },
     ],
   },
   game_likes: {
@@ -159,9 +194,16 @@ describe("searchGames", () => {
     const g2 = result.find((g) => g.id === "g2");
     const g3 = result.find((g) => g.id === "g3");
     expect(g1?.likes).toBe(5);
+    expect(g1?.clicks).toBe(1);
+    expect(g1?.link_clicks).toBe(2);
+    expect(g1?.plays).toBe(3);
     expect(g1?.forum_url).toBe("https://forum.makecode.com/t/g1");
     expect(g2?.likes).toBe(2);
+    expect(g2?.plays).toBe(0);
     expect(g3?.likes).toBe(8);
+    expect(g3?.clicks).toBe(3);
+    expect(g3?.link_clicks).toBe(3);
+    expect(g3?.plays).toBe(6);
     expect(g3?.forum_url).toBe("");
   });
 });

@@ -5,6 +5,7 @@ import Image from "next/image";
 import { GameWithStats } from "@/app/games/actions";
 import { recordClick } from "@/app/games/actions";
 import { LikeControl } from "./LikeControl";
+import { PlayControl } from "./PlayControl";
 
 export function GameJamCard({ game }: { game: GameWithStats }) {
   const [failed, setFailed] = useState(false);
@@ -21,6 +22,7 @@ export function GameJamCard({ game }: { game: GameWithStats }) {
         </div>
         <div className="flex items-center gap-3">
           <LikeControl game={game} />
+          <PlayControl game={game} />
           {game.forum_url ? (
             <a
               href={game.forum_url}

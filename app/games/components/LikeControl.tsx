@@ -4,7 +4,10 @@ import { GameWithStats } from "@/app/games/actions";
 
 function LikedIndicator({ likes }: { likes: number }) {
   return (
-    <span className="flex items-center gap-1 px-3 py-1 font-sans text-sm font-bold text-makecode-pink">
+    <span
+      className="inline-flex h-6 min-w-6 items-center justify-center gap-1 rounded-full border border-red-800 bg-transparent px-1.5 font-sans text-xs font-bold text-red-800"
+      aria-label={`${likes} likes`}
+    >
       ♥ {likes}
     </span>
   );
