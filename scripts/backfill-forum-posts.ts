@@ -24,7 +24,7 @@ const CATEGORY_ID = 5;
 function isSameSince(a?: string, b?: string): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
-  return new Date(a).toDateString() === new Date(b).toDateString();
+  return new Date(a).toISOString().slice(0, 10) === new Date(b).toISOString().slice(0, 10);
 }
 
 function loadCheckpoint(): Checkpoint | null {
