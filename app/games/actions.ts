@@ -158,11 +158,13 @@ export async function listGames({ category, jam, sort, limit = 10 }: ListParams)
   } else if (sort === "trending") {
     const { data: snapshots } = await supabaseServer
       .from("game_stats_snapshots")
-      .select("game_id, likes, plays")
-      .in("game_id", gameIds);
+      .select("game_id, likes, plays");
 
+    const gameIdSet = new Set(gameIds);
     const snapshotMap = new Map(
-      (snapshots || []).map((s) => [s.game_id, { likes: s.likes || 0, plays: s.plays || 0 }])
+      (snapshots || [])
+        .filter((s) => gameIdSet.has(s.game_id))
+        .map((s) => [s.game_id, { likes: s.likes || 0, plays: s.plays || 0 }])
     );
 
     merged.sort((a, b) => {
