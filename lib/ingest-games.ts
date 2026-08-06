@@ -424,7 +424,8 @@ function buildLinkClicksMap(page: TopicPage | null): Map<string, number> {
 async function fetchThreadTailPosts(
   topicId: number,
   knownIds: Set<number>,
-  firstPage?: TopicPage
+  firstPage?: TopicPage,
+  maxPages = 5
 ): Promise<{ posts: DiscoursePost[]; linkClicks: Map<string, number>; crawledIds: Set<number> }> {
   const first = firstPage || (await fetchTopicPageStep(topicId));
   if (!first) return { posts: [], linkClicks: new Map(), crawledIds: new Set() };
@@ -434,6 +435,7 @@ async function fetchThreadTailPosts(
   const totalPages = Math.ceil(first.posts_count / perPage);
   const posts: DiscoursePost[] = [];
   const crawledIds = new Set<number>();
+  let pagesCrawled = 0;
 
   for (let page = totalPages; page >= 1; page--) {
     const pageData = page === 1 ? first : await fetchTopicPageStep(topicId, page);
@@ -442,6 +444,9 @@ async function fetchThreadTailPosts(
     const pagePosts = pageData.post_stream.posts;
     posts.push(...pagePosts);
     for (const post of pagePosts) crawledIds.add(post.id);
+
+    pagesCrawled++;
+    if (pagesCrawled >= maxPages) break;
 
     const pageFullyKnown = pagePosts.length > 0 && pagePosts.every((post) => knownIds.has(post.id));
     if (pageFullyKnown) break;
@@ -472,7 +477,8 @@ async function batchWithDelay<T>(
   items: T[],
   batchSize: number,
   delayMs: number,
-  fn: (item: T) => Promise<void>
+  fn: (item: T) => Promise<void>,
+  sleepFn: (ms: number) => Promise<void> = sleep
 ) {
   for (let i = 0; i < items.length; i += batchSize) {
     const batch = items.slice(i, i + batchSize);
@@ -480,7 +486,7 @@ async function batchWithDelay<T>(
     const rejected = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
     if (rejected.length) throw rejected[0].reason;
     if (i + batchSize < items.length && delayMs > 0) {
-      await sleep(delayMs);
+      await sleepFn(delayMs);
     }
   }
 }
@@ -490,6 +496,8 @@ type IngestTopicOptions = {
   skipFirstPost?: boolean;
   firstPage?: TopicPage;
   delayMs?: number;
+  maxPages?: number;
+  sleep?: (ms: number) => Promise<void>;
 };
 
 type ProcessTopicPostsOptions = {
@@ -504,30 +512,37 @@ async function processTopicPosts(
   knownIds: Set<number>,
   linkClicks: Map<string, number>,
   delayMs: number,
-  options: ProcessTopicPostsOptions = {}
+  options: ProcessTopicPostsOptions = {},
+  sleepFn: (ms: number) => Promise<void> = sleep
 ): Promise<{ games: number; errors: string[] }> {
   const errors: string[] = [];
   let games = 0;
 
-  await batchWithDelay(posts, CONCURRENCY_LIMIT, delayMs, async (post) => {
-    if (options.skipFirstPost && post.post_number === 1) return;
+  await batchWithDelay(
+    posts,
+    CONCURRENCY_LIMIT,
+    delayMs,
+    async (post) => {
+      if (options.skipFirstPost && post.post_number === 1) return;
 
-    try {
-      if (knownIds.has(post.id)) {
-        const urls = extractShareUrls(post.cooked);
-        const clicks = urls.length ? (linkClicks.get(urls[0]) ?? 0) : 0;
-        await refreshKnownPostMetadata(post, topic, clicks);
-      } else {
-        const urls = extractShareUrls(post.cooked);
-        for (const url of urls) {
-          const gameId = await ingestPost(url, post, topic, categoryMap, options.jamId, undefined, linkClicks.get(url));
-          if (gameId) games++;
+      try {
+        if (knownIds.has(post.id)) {
+          const urls = extractShareUrls(post.cooked);
+          const clicks = urls.length ? (linkClicks.get(urls[0]) ?? 0) : 0;
+          await refreshKnownPostMetadata(post, topic, clicks);
+        } else {
+          const urls = extractShareUrls(post.cooked);
+          for (const url of urls) {
+            const gameId = await ingestPost(url, post, topic, categoryMap, options.jamId, undefined, linkClicks.get(url));
+            if (gameId) games++;
+          }
         }
+      } catch (e) {
+        errors.push(e instanceof Error ? e.message : String(e));
       }
-    } catch (e) {
-      errors.push(e instanceof Error ? e.message : String(e));
-    }
-  });
+    },
+    sleepFn
+  );
 
   return { games, errors };
 }
@@ -542,25 +557,46 @@ async function ingestTopic(
   // (slower pacing); a topic we've already mostly mined only needs a small
   // tail crawl, so the default (fast) pacing is fine.
   const delayMs = knownIds.size === 0 ? 1000 : (options.delayMs ?? 100);
+  const sleepFn = options.sleep ?? sleep;
 
-  const { posts, linkClicks, crawledIds } = await fetchThreadTailPosts(topic.id, knownIds, options.firstPage);
+  const { posts, linkClicks, crawledIds } = await fetchThreadTailPosts(
+    topic.id,
+    knownIds,
+    options.firstPage,
+    options.maxPages
+  );
 
-  const { games, errors } = await processTopicPosts(posts, topic, categoryMap, knownIds, linkClicks, delayMs, {
-    jamId: options.jamId,
-    skipFirstPost: options.skipFirstPost,
-  });
+  const { games, errors } = await processTopicPosts(
+    posts,
+    topic,
+    categoryMap,
+    knownIds,
+    linkClicks,
+    delayMs,
+    {
+      jamId: options.jamId,
+      skipFirstPost: options.skipFirstPost,
+    },
+    sleepFn
+  );
 
   // Anything known but outside the crawled tail wasn't re-fetched as part of
   // a page, but its reactions/click count may still have changed - poke it
   // individually by post id instead of re-crawling its page.
   const uncrawledKnownIds = [...knownIds].filter((id) => !crawledIds.has(id));
-  await batchWithDelay(uncrawledKnownIds, CONCURRENCY_LIMIT, delayMs, async (forumPostId) => {
-    try {
-      await refreshSinglePostReactions(forumPostId);
-    } catch (e) {
-      errors.push(e instanceof Error ? e.message : String(e));
-    }
-  });
+  await batchWithDelay(
+    uncrawledKnownIds,
+    CONCURRENCY_LIMIT,
+    delayMs,
+    async (forumPostId) => {
+      try {
+        await refreshSinglePostReactions(forumPostId);
+      } catch (e) {
+        errors.push(e instanceof Error ? e.message : String(e));
+      }
+    },
+    sleepFn
+  );
 
   return { games, errors };
 }
@@ -579,7 +615,8 @@ async function fetchCategoryListingStep(
 export async function ingestJamTopic(
   topicId: number,
   lastIngestAt?: Date,
-  delayMs = 100
+  delayMs = 100,
+  sleepFn?: (ms: number) => Promise<void>
 ): Promise<{ games: number; errors: string[] }> {
   const categoryMap = await getCategories();
   const first = await fetchTopicPageStep(topicId);
@@ -588,7 +625,13 @@ export async function ingestJamTopic(
   const topic: DiscourseTopic = { ...first, id: topicId };
   const jam = await upsertJam(topic);
 
-  return ingestTopic(topic, categoryMap, { jamId: jam, skipFirstPost: true, firstPage: first, delayMs });
+  return ingestTopic(topic, categoryMap, {
+    jamId: jam,
+    skipFirstPost: true,
+    firstPage: first,
+    delayMs,
+    sleep: sleepFn,
+  });
 }
 
 /**
@@ -620,10 +663,11 @@ export async function listActiveCategoryTopics(
  * so it can be run inside its own child workflow (one per topic). */
 export async function ingestSingleCategoryTopic(
   topic: DiscourseTopic,
-  delayMs = 100
+  delayMs = 100,
+  sleepFn?: (ms: number) => Promise<void>
 ): Promise<{ games: number; errors: string[] }> {
   const categoryMap = await getCategories();
-  return ingestTopic(topic, categoryMap, { delayMs });
+  return ingestTopic(topic, categoryMap, { delayMs, sleep: sleepFn });
 }
 
 export async function ingestCategoryTopics(

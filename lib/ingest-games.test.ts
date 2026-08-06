@@ -301,6 +301,104 @@ describe("ingestCategoryTopics", () => {
       headers: { Accept: "application/json" },
     });
   });
+
+  it("stops crawling after maxPages even if no fully-known page is hit", async () => {
+    // Topic 500 has 8 pages (1 post per page), no known posts.
+    // The tail walk should stop after 5 pages (8, 7, 6, 5, 4).
+    mockSupabase.from = vi.fn((table: string) => {
+      const calls: string[] = [];
+      const chain = {
+        select: () => { calls.push("select"); return chain; },
+        eq: () => { calls.push("eq"); return chain; },
+        limit: () => { calls.push("limit"); return chain; },
+        single: () => { calls.push("single"); return chain; },
+        insert: () => { calls.push("insert"); return chain; },
+        upsert: () => { calls.push("upsert"); return chain; },
+        update: () => { calls.push("update"); return chain; },
+        then: (resolve: (value: unknown) => void) => {
+          if (table === "game_forum_posts" && calls.includes("select") && calls.includes("eq") && !calls.includes("limit")) {
+            return resolve({ data: [], error: null });
+          }
+          if (calls.includes("upsert") || calls.includes("update")) return resolve({ error: null });
+          if (calls.includes("insert") && calls.includes("single")) return resolve({ data: { id: "game-capped" }, error: null });
+          if (calls.includes("select") && calls.includes("limit")) return resolve({ data: [] });
+          return resolve({ data: null, error: null });
+        },
+      };
+      return chain;
+    });
+
+    function makePage(pageNum: number, postId: number, gamePostId: number) {
+      return jsonResponse({
+        id: 500,
+        title: "Chatting area have fun",
+        category_id: 5,
+        posts_count: 8,
+        views: 1000,
+        post_stream: {
+          posts: [
+            { id: postId, post_number: pageNum, cooked: `<p><a href="https://arcade.makecode.com/${gamePostId}">game</a></p>`, user_id: 1, username: "player", created_at: "2026-08-01T00:00:00.000Z", reaction_users_count: 0 },
+          ],
+        },
+      });
+    }
+
+    const pages: Record<number, ReturnType<typeof makePage>> = {};
+    for (let i = 1; i <= 8; i++) {
+      pages[i] = makePage(i, i, 10000 + i);
+    }
+
+    mockFetch
+      .mockResolvedValueOnce(
+        jsonResponse({
+          topic_list: {
+            topics: [
+              {
+                id: 500,
+                title: "Chatting area have fun",
+                posts_count: 8,
+                bumped_at: "2026-08-04T10:00:00.000Z",
+                category_id: 5,
+                views: 1000,
+                created_at: "2026-08-01T00:00:00.000Z",
+              },
+            ],
+          },
+        })
+      )
+      .mockResolvedValueOnce(jsonResponse({ categories: [{ id: 5, name: "Games", slug: "games" }] }))
+      .mockResolvedValueOnce(pages[1])
+      .mockResolvedValueOnce(pages[8])
+      .mockResolvedValueOnce(pages[7])
+      .mockResolvedValueOnce(pages[6])
+      .mockResolvedValueOnce(pages[5])
+      .mockResolvedValueOnce(pages[4])
+      // Games from pages 8, 7, 6, 5, 4.
+      .mockResolvedValueOnce(jsonResponse({ kind: "script", id: "abc-8", name: "Game 8" }))
+      .mockResolvedValueOnce(jsonResponse({ kind: "script", id: "abc-7", name: "Game 7" }))
+      .mockResolvedValueOnce(jsonResponse({ kind: "script", id: "abc-6", name: "Game 6" }))
+      .mockResolvedValueOnce(jsonResponse({ kind: "script", id: "abc-5", name: "Game 5" }))
+      .mockResolvedValueOnce(jsonResponse({ kind: "script", id: "abc-4", name: "Game 4" }));
+
+    const result = await ingestCategoryTopics(5, 10, new Date("2026-08-03T00:00:00.000Z"));
+
+    expect(result.games).toBe(5);
+
+    const topicFetches = mockFetch.mock.calls
+      .filter((call) => String(call[0]).includes("/t/500.json"))
+      .map((call) => String(call[0]));
+    expect(topicFetches).toEqual([
+      "https://forum.makecode.com/t/500.json",
+      "https://forum.makecode.com/t/500.json?page=8",
+      "https://forum.makecode.com/t/500.json?page=7",
+      "https://forum.makecode.com/t/500.json?page=6",
+      "https://forum.makecode.com/t/500.json?page=5",
+      "https://forum.makecode.com/t/500.json?page=4",
+    ]);
+    expect(topicFetches).not.toContain("https://forum.makecode.com/t/500.json?page=3");
+    expect(topicFetches).not.toContain("https://forum.makecode.com/t/500.json?page=2");
+    expect(topicFetches).not.toContain("https://forum.makecode.com/t/500.json?page=1");
+  });
 });
 
 describe("ingestJamTopic", () => {

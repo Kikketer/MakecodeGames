@@ -1,4 +1,4 @@
-import { defineHook, getWorkflowMetadata } from "workflow";
+import { defineHook, getWorkflowMetadata, sleep } from "workflow";
 import { start } from "workflow/api";
 import {
   countGameForumPostsStep,
@@ -65,7 +65,7 @@ export async function ingestJamTopicChildWorkflow(
   // the run and inspecting the raw args).
   console.log(`[ingest] jam topic ${topicId}`);
   await runChildWithCompletion(
-    () => ingestJamTopic(topicId, lastIngestAtIso ? new Date(lastIngestAtIso) : undefined),
+    () => ingestJamTopic(topicId, lastIngestAtIso ? new Date(lastIngestAtIso) : undefined, undefined, sleep),
     completionTokenArg
   );
 }
@@ -76,7 +76,7 @@ export async function ingestCategoryTopicChildWorkflow(
 ) {
   "use workflow";
   console.log(`[ingest] topic ${topic.id} "${topic.title}" (${topic.posts_count} posts)`);
-  await runChildWithCompletion(() => ingestSingleCategoryTopic(topic), completionTokenArg);
+  await runChildWithCompletion(() => ingestSingleCategoryTopic(topic, undefined, sleep), completionTokenArg);
 }
 
 async function spawnJamChild(lastIngestAtIso: string | undefined, token: string): Promise<void> {
