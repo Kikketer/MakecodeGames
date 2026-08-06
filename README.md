@@ -58,3 +58,7 @@ Issues and pull requests are welcome. Before opening a PR:
 ## Deploying
 
 This app is built to deploy on [Vercel](https://vercel.com), but any host that supports Next.js should work. Make sure the environment variables listed in `.env.local.example` are configured for the deployment target, and that CI has access to a `SUPABASE_PROJECT_ID` variable and the Supabase secrets needed to apply migrations (see `.github/workflows/apply-schema.yml`).
+
+## License
+
+[MIT](LICENSE)
