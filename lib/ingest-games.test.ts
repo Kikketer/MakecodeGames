@@ -4,6 +4,12 @@ import { refreshGameReactions, ingestPost, ingestCategoryTopics, ingestJamTopic,
 const mockSupabase = vi.hoisted(() => ({ from: vi.fn(), rpc: vi.fn() }));
 
 vi.mock("@/lib/supabase-server", () => ({ supabaseServer: mockSupabase }));
+vi.mock("@/lib/algolia", () => ({
+  getAlgoliaSearchClient: vi.fn(() => null),
+  getAlgoliaWriteClient: vi.fn(() => null),
+  GAMES_INDEX: "games",
+  FORUM_TOPICS_INDEX: "forum_topics",
+}));
 
 function makeBuilder(table: string, response: unknown) {
   const thenable = {

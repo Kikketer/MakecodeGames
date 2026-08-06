@@ -1,15 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { addLike, listGames, recordClick, searchGames } from "./actions";
+import { addLike, listGames, recordClick, searchGames, searchGamesAndTopics, getTopicTitle } from "./actions";
 
-const mockSupabase = vi.hoisted(() => ({ from: vi.fn() }));
+const mockSupabase = vi.hoisted(() => ({ from: vi.fn(), rpc: vi.fn() }));
 const mockGetUser = vi.hoisted(() => vi.fn());
 const mockRevalidatePath = vi.hoisted(() => vi.fn());
 const mockRefreshReactions = vi.hoisted(() => vi.fn());
+const mockGetAlgoliaSearchClient = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/supabase-server", () => ({ supabaseServer: mockSupabase }));
 vi.mock("@/lib/auth", () => ({ getUser: mockGetUser }));
 vi.mock("next/cache", () => ({ revalidatePath: mockRevalidatePath }));
 vi.mock("@/lib/ingest-games", () => ({ refreshGameReactions: mockRefreshReactions }));
+vi.mock("@/lib/algolia", () => ({
+  getAlgoliaSearchClient: mockGetAlgoliaSearchClient,
+  getAlgoliaWriteClient: vi.fn(),
+  GAMES_INDEX: "games",
+  FORUM_TOPICS_INDEX: "forum_topics",
+}));
 
 function makeBuilder(table: string, response: unknown) {
   const thenable = {
@@ -63,6 +70,7 @@ describe("addLike", () => {
     mockGetUser.mockReset();
     mockRevalidatePath.mockReset();
     mockRefreshReactions.mockReset();
+    mockGetAlgoliaSearchClient.mockReset();
   });
 
   it("throws if the user is not signed in", async () => {
@@ -95,6 +103,7 @@ describe("listGames", () => {
     mockSupabase.from = vi.fn((table: string) => makeBuilder(table, responses[table as keyof typeof responses]));
     mockGetUser.mockReset();
     mockRefreshReactions.mockReset();
+    mockGetAlgoliaSearchClient.mockReset();
   });
 
   it("uses reaction_count as likes and game_stats for clicks", async () => {
@@ -136,6 +145,14 @@ describe("listGames", () => {
     expect((g1?.likes ?? 0) + (g1?.plays ?? 0)).toBe(16);
     expect((g2?.likes ?? 0) + (g2?.plays ?? 0)).toBe(6);
   });
+
+  it("fetches games for a forum topic", async () => {
+    const result = await listGames({ topic: 123, sort: "hot", limit: 10 });
+
+    expect(mockSupabase.from).toHaveBeenCalledWith("game_forum_posts");
+    expect(result).toHaveLength(2);
+    expect(result.map((g) => g.id)).toEqual(expect.arrayContaining(["g1", "g2"]));
+  });
 });
 
 const searchResponses = {
@@ -165,12 +182,37 @@ const searchResponses = {
   },
 };
 
+const algoliaSearchResponses = {
+  results: [
+    {
+      hits: [
+        {
+          objectID: "t1",
+          forum_topic_id: 101,
+          title: "Space Games",
+          category_name: "Games",
+          reply_count: 5,
+          view_count: 50,
+        },
+      ],
+    },
+    {
+      hits: [
+        { objectID: "g1", title: "Space Quest" },
+        { objectID: "g3", title: "A Space Adventure" },
+        { objectID: "g2", title: "My Space Game" },
+      ],
+    },
+  ],
+};
+
 describe("searchGames", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSupabase.from = vi.fn((table: string) => makeBuilder(table, searchResponses[table as keyof typeof searchResponses]));
     mockGetUser.mockReset();
     mockRefreshReactions.mockReset();
+    mockGetAlgoliaSearchClient.mockReset();
   });
 
   it("returns an empty array for empty or whitespace-only queries", async () => {
@@ -208,12 +250,81 @@ describe("searchGames", () => {
   });
 });
 
+describe("searchGamesAndTopics", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSupabase.from = vi.fn((table: string) => makeBuilder(table, searchResponses[table as keyof typeof searchResponses]));
+    mockGetUser.mockReset();
+    mockRefreshReactions.mockReset();
+    mockGetAlgoliaSearchClient.mockReset();
+  });
+
+  it("falls back to Supabase ilike when Algolia is not configured", async () => {
+    mockGetAlgoliaSearchClient.mockReturnValue(null);
+
+    const result = await searchGamesAndTopics("space");
+
+    expect(result.topics).toEqual([]);
+    expect(result.games.map((g) => g.id)).toEqual(["g1", "g3", "g2"]);
+  });
+
+  it("uses Algolia when configured and hydrates games in result order", async () => {
+    mockGetAlgoliaSearchClient.mockReturnValue({
+      search: vi.fn(() => Promise.resolve(algoliaSearchResponses)),
+    });
+
+    const result = await searchGamesAndTopics("space", 4);
+
+    expect(result.topics).toHaveLength(1);
+    expect(result.topics[0]).toMatchObject({
+      forum_topic_id: 101,
+      title: "Space Games",
+      category_name: "Games",
+      reply_count: 5,
+      view_count: 50,
+    });
+    expect(result.games.map((g) => g.id)).toEqual(["g1", "g3", "g2"]);
+  });
+
+  it("returns empty results for empty or whitespace queries", async () => {
+    expect(await searchGamesAndTopics("")).toEqual({ topics: [], games: [] });
+    expect(await searchGamesAndTopics("   ")).toEqual({ topics: [], games: [] });
+  });
+});
+
+describe("getTopicTitle", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSupabase.from = vi.fn();
+    mockGetAlgoliaSearchClient.mockReset();
+  });
+
+  it("returns the topic title from a matching forum post", async () => {
+    mockSupabase.from.mockReturnValue(
+      makeBuilder("game_forum_posts", {
+        data: [{ forum_topic_title: "Space Games" }],
+      })
+    );
+
+    const title = await getTopicTitle(101);
+    expect(title).toBe("Space Games");
+  });
+
+  it("returns null when no posts match the topic", async () => {
+    mockSupabase.from.mockReturnValue(makeBuilder("game_forum_posts", { data: [] }));
+
+    const title = await getTopicTitle(999);
+    expect(title).toBeNull();
+  });
+});
+
 describe("recordClick", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSupabase.from = vi.fn((table: string) => makeBuilder(table, undefined));
     mockGetUser.mockReset();
     mockRefreshReactions.mockReset();
+    mockGetAlgoliaSearchClient.mockReset();
   });
 
   it("records an anonymous click and refreshes reactions in the background", async () => {
