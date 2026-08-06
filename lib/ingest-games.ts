@@ -424,7 +424,8 @@ function buildLinkClicksMap(page: TopicPage | null): Map<string, number> {
 async function fetchThreadTailPosts(
   topicId: number,
   knownIds: Set<number>,
-  firstPage?: TopicPage
+  firstPage?: TopicPage,
+  maxPages = 5
 ): Promise<{ posts: DiscoursePost[]; linkClicks: Map<string, number>; crawledIds: Set<number> }> {
   const first = firstPage || (await fetchTopicPageStep(topicId));
   if (!first) return { posts: [], linkClicks: new Map(), crawledIds: new Set() };
@@ -434,6 +435,7 @@ async function fetchThreadTailPosts(
   const totalPages = Math.ceil(first.posts_count / perPage);
   const posts: DiscoursePost[] = [];
   const crawledIds = new Set<number>();
+  let pagesCrawled = 0;
 
   for (let page = totalPages; page >= 1; page--) {
     const pageData = page === 1 ? first : await fetchTopicPageStep(topicId, page);
@@ -442,6 +444,9 @@ async function fetchThreadTailPosts(
     const pagePosts = pageData.post_stream.posts;
     posts.push(...pagePosts);
     for (const post of pagePosts) crawledIds.add(post.id);
+
+    pagesCrawled++;
+    if (pagesCrawled >= maxPages) break;
 
     const pageFullyKnown = pagePosts.length > 0 && pagePosts.every((post) => knownIds.has(post.id));
     if (pageFullyKnown) break;
@@ -490,6 +495,7 @@ type IngestTopicOptions = {
   skipFirstPost?: boolean;
   firstPage?: TopicPage;
   delayMs?: number;
+  maxPages?: number;
 };
 
 type ProcessTopicPostsOptions = {
@@ -543,7 +549,12 @@ async function ingestTopic(
   // tail crawl, so the default (fast) pacing is fine.
   const delayMs = knownIds.size === 0 ? 1000 : (options.delayMs ?? 100);
 
-  const { posts, linkClicks, crawledIds } = await fetchThreadTailPosts(topic.id, knownIds, options.firstPage);
+  const { posts, linkClicks, crawledIds } = await fetchThreadTailPosts(
+    topic.id,
+    knownIds,
+    options.firstPage,
+    options.maxPages
+  );
 
   const { games, errors } = await processTopicPosts(posts, topic, categoryMap, knownIds, linkClicks, delayMs, {
     jamId: options.jamId,
