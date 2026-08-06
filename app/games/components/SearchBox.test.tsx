@@ -1,15 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { SearchBox } from "./SearchBox";
-import type { GameWithStats } from "@/app/games/actions";
+import type { GameWithStats, ForumTopic, SearchGamesAndTopicsResult } from "@/app/games/actions";
 
-const mockSearchGames = vi.hoisted(() => vi.fn());
+const mockSearchGamesAndTopics = vi.hoisted(() => vi.fn());
 const mockRecordClick = vi.hoisted(() => vi.fn());
 const mockPush = vi.hoisted(() => vi.fn());
 const mockWindowOpen = vi.hoisted(() => vi.fn());
 
 vi.mock("@/app/games/actions", () => ({
-  searchGames: mockSearchGames,
+  searchGamesAndTopics: mockSearchGamesAndTopics,
   recordClick: mockRecordClick,
 }));
 
@@ -33,6 +33,20 @@ function makeGame(title: string, id: string): GameWithStats {
   } as unknown as GameWithStats;
 }
 
+function makeTopic(title: string, id: number): ForumTopic {
+  return {
+    forum_topic_id: id,
+    title,
+    category_name: "Games",
+    reply_count: 5,
+    view_count: 50,
+  };
+}
+
+function makeResult(games: GameWithStats[], topics: ForumTopic[] = []): SearchGamesAndTopicsResult {
+  return { topics, games };
+}
+
 describe("SearchBox", () => {
   let windowOpenSpy: ReturnType<typeof vi.spyOn>;
 
@@ -47,40 +61,42 @@ describe("SearchBox", () => {
     windowOpenSpy.mockRestore();
   });
 
-  it("does not call searchGames for empty or whitespace input", async () => {
+  it("does not call searchGamesAndTopics for empty or whitespace input", async () => {
     render(<SearchBox />);
     const input = screen.getByRole("searchbox");
 
     fireEvent.change(input, { target: { value: "   " } });
     await act(() => vi.advanceTimersByTimeAsync(300));
 
-    expect(mockSearchGames).not.toHaveBeenCalled();
+    expect(mockSearchGamesAndTopics).not.toHaveBeenCalled();
   });
 
-  it("debounces searchGames calls and uses the latest query", async () => {
-    mockSearchGames.mockResolvedValue([]);
+  it("debounces searchGamesAndTopics calls and uses the latest query", async () => {
+    mockSearchGamesAndTopics.mockResolvedValue(makeResult([]));
     render(<SearchBox />);
     const input = screen.getByRole("searchbox");
 
     fireEvent.change(input, { target: { value: "sp" } });
     await act(() => vi.advanceTimersByTimeAsync(200));
-    expect(mockSearchGames).not.toHaveBeenCalled();
+    expect(mockSearchGamesAndTopics).not.toHaveBeenCalled();
 
     fireEvent.change(input, { target: { value: "space" } });
     await act(() => vi.advanceTimersByTimeAsync(300));
 
-    expect(mockSearchGames).toHaveBeenCalledTimes(1);
-    expect(mockSearchGames).toHaveBeenLastCalledWith("space");
+    expect(mockSearchGamesAndTopics).toHaveBeenCalledTimes(1);
+    expect(mockSearchGamesAndTopics).toHaveBeenLastCalledWith("space", 4);
   });
 
-  it("shows up to 4 dropdown results", async () => {
-    mockSearchGames.mockResolvedValue([
-      makeGame("One", "g1"),
-      makeGame("Two", "g2"),
-      makeGame("Three", "g3"),
-      makeGame("Four", "g4"),
-      makeGame("Five", "g5"),
-    ]);
+  it("shows up to 4 dropdown games", async () => {
+    mockSearchGamesAndTopics.mockResolvedValue(
+      makeResult([
+        makeGame("One", "g1"),
+        makeGame("Two", "g2"),
+        makeGame("Three", "g3"),
+        makeGame("Four", "g4"),
+        makeGame("Five", "g5"),
+      ])
+    );
     render(<SearchBox />);
     const input = screen.getByRole("searchbox");
 
@@ -88,6 +104,23 @@ describe("SearchBox", () => {
     await act(() => vi.advanceTimersByTimeAsync(300));
 
     await waitFor(() => expect(screen.getAllByRole("link")).toHaveLength(4));
+  });
+
+  it("shows matching topics before games", async () => {
+    const topic = makeTopic("Space Games", 101);
+    const game = makeGame("Space Quest", "g1");
+    mockSearchGamesAndTopics.mockResolvedValue(makeResult([game], [topic]));
+
+    render(<SearchBox />);
+    const input = screen.getByRole("searchbox");
+
+    fireEvent.change(input, { target: { value: "space" } });
+    await act(() => vi.advanceTimersByTimeAsync(300));
+
+    const links = await screen.findAllByRole("link");
+    expect(links).toHaveLength(2);
+    expect(links[0].textContent).toContain("Space Games");
+    expect(links[1].textContent).toContain("Space Quest");
   });
 
   it("navigates to the search results page on submit", async () => {
@@ -110,9 +143,25 @@ describe("SearchBox", () => {
     expect(mockPush).not.toHaveBeenCalled();
   });
 
-  it("records a click when a dropdown result is clicked", async () => {
+  it("navigates to the topic page when a topic result is clicked", async () => {
+    const topic = makeTopic("Space Games", 101);
+    mockSearchGamesAndTopics.mockResolvedValue(makeResult([], [topic]));
+    render(<SearchBox />);
+    const input = screen.getByRole("searchbox");
+
+    fireEvent.change(input, { target: { value: "space" } });
+    await act(() => vi.advanceTimersByTimeAsync(300));
+
+    const link = await screen.findByRole("link");
+    fireEvent.click(link);
+
+    expect(mockPush).toHaveBeenCalledWith("/games/search?topic=101");
+    expect((screen.getByRole("searchbox") as HTMLInputElement).value).toBe("");
+  });
+
+  it("records a click when a game dropdown result is clicked", async () => {
     const game = makeGame("Space Game", "g1");
-    mockSearchGames.mockResolvedValue([game]);
+    mockSearchGamesAndTopics.mockResolvedValue(makeResult([game]));
     render(<SearchBox />);
     const input = screen.getByRole("searchbox");
 
@@ -127,7 +176,7 @@ describe("SearchBox", () => {
 
   it("highlights the first dropdown result with ArrowDown", async () => {
     const game = makeGame("Hall of Fame", "g1");
-    mockSearchGames.mockResolvedValue([game]);
+    mockSearchGamesAndTopics.mockResolvedValue(makeResult([game]));
     render(<SearchBox />);
     const input = screen.getByRole("searchbox");
 
@@ -141,9 +190,24 @@ describe("SearchBox", () => {
     expect(link.className).toContain("bg-makecode-yellow");
   });
 
-  it("opens the highlighted result with Enter", async () => {
+  it("navigates to a topic with Enter on a highlighted topic", async () => {
+    const topic = makeTopic("Hall of Fame", 101);
+    mockSearchGamesAndTopics.mockResolvedValue(makeResult([], [topic]));
+    render(<SearchBox />);
+    const input = screen.getByRole("searchbox");
+
+    fireEvent.change(input, { target: { value: "hall" } });
+    await act(() => vi.advanceTimersByTimeAsync(300));
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(mockPush).toHaveBeenCalledWith("/games/search?topic=101");
+  });
+
+  it("opens the highlighted game with Enter", async () => {
     const game = makeGame("Hall of Fame", "g1");
-    mockSearchGames.mockResolvedValue([game]);
+    mockSearchGamesAndTopics.mockResolvedValue(makeResult([game]));
     render(<SearchBox />);
     const input = screen.getByRole("searchbox");
 
@@ -163,7 +227,7 @@ describe("SearchBox", () => {
 
   it("moves the highlight up and down with arrow keys", async () => {
     const games = [makeGame("One", "g1"), makeGame("Two", "g2")];
-    mockSearchGames.mockResolvedValue(games);
+    mockSearchGamesAndTopics.mockResolvedValue(makeResult(games));
     render(<SearchBox />);
     const input = screen.getByRole("searchbox");
 
@@ -184,7 +248,7 @@ describe("SearchBox", () => {
 
   it("updates the highlighted result on mouse hover", async () => {
     const games = [makeGame("One", "g1"), makeGame("Two", "g2")];
-    mockSearchGames.mockResolvedValue(games);
+    mockSearchGamesAndTopics.mockResolvedValue(makeResult(games));
     render(<SearchBox />);
     const input = screen.getByRole("searchbox");
 

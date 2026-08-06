@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { supabaseServer } from "@/lib/supabase-server";
 import { getUser } from "@/lib/auth";
 import { refreshGameReactions } from "@/lib/ingest-games";
+import { getAlgoliaSearchClient, GAMES_INDEX, FORUM_TOPICS_INDEX } from "@/lib/algolia";
 
 export type GameWithStats = {
   id: string;
@@ -29,6 +30,19 @@ export type GameWithStats = {
   post_cooked: string | null;
 };
 
+export type ForumTopic = {
+  forum_topic_id: number;
+  title: string;
+  category_name: string | null;
+  reply_count: number;
+  view_count: number;
+};
+
+export type SearchGamesAndTopicsResult = {
+  topics: ForumTopic[];
+  games: GameWithStats[];
+};
+
 type CategoryRow = { id: number; name: string; slug: string; parent_category_id?: number | null };
 type JamRow = { id: string; title: string };
 type StatsRow = { game_id: string; clicks: number };
@@ -46,6 +60,7 @@ type PostRow = {
 type ListParams = {
   category?: string;
   jam?: string;
+  topic?: number;
   sort: "hot" | "likes" | "newest" | "trending";
   limit?: number;
 };
@@ -105,14 +120,17 @@ export async function listJams(): Promise<JamRow[]> {
 
 type IdRow = { game_id: string };
 
-export async function listGames({ category, jam, sort, limit = 10 }: ListParams): Promise<GameWithStats[]> {
-  const fetchAll = !category || category === "all";
+export async function listGames({ category, jam, topic, sort, limit = 10 }: ListParams): Promise<GameWithStats[]> {
+  const fetchAll = (!category || category === "all") && !topic;
   let gameIds: string[] = [];
   let games: unknown[] = [];
   let stats: unknown[] = [];
   let posts: unknown[] = [];
 
-  if (fetchAll) {
+  if (topic) {
+    const { data } = await supabaseServer.from("game_forum_posts").select("game_id").eq("forum_topic_id", topic);
+    gameIds = [...new Set(((data || []) as unknown as IdRow[]).map((d) => d.game_id))];
+  } else if (fetchAll) {
     const { data: dailyStats } = await supabaseServer.from("game_daily_stats").select("*");
     games = (dailyStats || []) as unknown[];
     gameIds = (games as { id: string }[]).map((g) => g.id);
@@ -198,21 +216,11 @@ export async function listGames({ category, jam, sort, limit = 10 }: ListParams)
   return merged.slice(0, limit);
 }
 
-export async function searchGames(query: string): Promise<GameWithStats[]> {
-  const trimmed = query.trim();
-  if (!trimmed) return [];
+async function hydrateGames(gameIds: string[]): Promise<GameWithStats[]> {
+  if (gameIds.length === 0) return [];
 
-  const { data: games } = await supabaseServer
-    .from("games")
-    .select("*")
-    .ilike("title", `%${trimmed}%`);
-
-  const gameRows = (games || []) as unknown as GameWithStats[];
-  if (gameRows.length === 0) return [];
-
-  const gameIds = gameRows.map((g) => g.id);
-
-  const [{ data: stats }, { data: posts }] = await Promise.all([
+  const [{ data: gamesData }, { data: statsData }, { data: postsData }] = await Promise.all([
+    supabaseServer.from("games").select("*").in("id", gameIds),
     supabaseServer.from("game_stats").select("game_id, clicks").in("game_id", gameIds),
     supabaseServer
       .from("game_forum_posts")
@@ -220,13 +228,32 @@ export async function searchGames(query: string): Promise<GameWithStats[]> {
       .in("game_id", gameIds),
   ]);
 
+  const gameRows = (gamesData || []) as unknown as GameWithStats[];
   const merged = mergeGameData(
     gameRows,
-    (stats || []) as unknown as StatsRow[],
-    (posts || []) as unknown as PostRow[]
+    (statsData || []) as unknown as StatsRow[],
+    (postsData || []) as unknown as PostRow[]
   );
 
-  const lowerQuery = trimmed.toLowerCase();
+  const orderMap = new Map(gameIds.map((id, index) => [id, index]));
+  merged.sort((a, b) => (orderMap.get(a.id) ?? 0) - (orderMap.get(b.id) ?? 0));
+
+  return merged;
+}
+
+async function searchGamesSupabase(query: string, limit?: number): Promise<GameWithStats[]> {
+  const { data: games } = await supabaseServer
+    .from("games")
+    .select("*")
+    .ilike("title", `%${query}%`);
+
+  const gameRows = (games || []) as unknown as GameWithStats[];
+  if (gameRows.length === 0) return [];
+
+  const gameIds = gameRows.map((g) => g.id);
+  const merged = await hydrateGames(gameIds);
+
+  const lowerQuery = query.toLowerCase();
   merged.sort((a, b) => {
     const ai = a.title.toLowerCase().indexOf(lowerQuery);
     const bi = b.title.toLowerCase().indexOf(lowerQuery);
@@ -234,7 +261,79 @@ export async function searchGames(query: string): Promise<GameWithStats[]> {
     return new Date(b.first_seen_at).getTime() - new Date(a.first_seen_at).getTime();
   });
 
-  return merged;
+  return limit ? merged.slice(0, limit) : merged;
+}
+
+export async function searchGamesAndTopics(
+  query: string,
+  limit?: number
+): Promise<SearchGamesAndTopicsResult> {
+  const trimmed = query.trim();
+  if (!trimmed) return { topics: [], games: [] };
+
+  const client = getAlgoliaSearchClient();
+  if (client) {
+    try {
+      const { results } = (await client.search({
+        requests: [
+          {
+            indexName: FORUM_TOPICS_INDEX,
+            query: trimmed,
+            hitsPerPage: 3,
+            attributesToRetrieve: ["forum_topic_id", "title", "category_name", "reply_count", "view_count"],
+          },
+          {
+            indexName: GAMES_INDEX,
+            query: trimmed,
+            hitsPerPage: limit ?? 4,
+            attributesToRetrieve: [
+              "objectID",
+              "title",
+              "description",
+              "author_username",
+              "thumb_url",
+              "game_url",
+              "first_seen_at",
+            ],
+          },
+        ],
+      })) as unknown as {
+        results: Array<{ hits: Array<Record<string, unknown> & { objectID: string }> }>;
+      };
+
+      const [topicResult, gameResult] = results;
+
+      const topics: ForumTopic[] = (topicResult?.hits || []).map((hit) => ({
+        forum_topic_id: Number(hit.forum_topic_id ?? 0),
+        title: String(hit.title ?? ""),
+        category_name: hit.category_name ? String(hit.category_name) : null,
+        reply_count: Number(hit.reply_count ?? 0),
+        view_count: Number(hit.view_count ?? 0),
+      }));
+
+      const gameIds = (gameResult?.hits || []).map((hit) => String(hit.objectID));
+      const games = gameIds.length > 0 ? await hydrateGames(gameIds) : [];
+
+      return { topics, games };
+    } catch (error) {
+      console.error("Algolia search failed, falling back to Supabase:", error);
+    }
+  }
+
+  return { topics: [], games: await searchGamesSupabase(trimmed, limit) };
+}
+
+export async function searchGames(query: string): Promise<GameWithStats[]> {
+  return (await searchGamesAndTopics(query, 1000)).games;
+}
+
+export async function getTopicTitle(topicId: number): Promise<string | null> {
+  const { data } = await supabaseServer
+    .from("game_forum_posts")
+    .select("forum_topic_title")
+    .eq("forum_topic_id", topicId)
+    .limit(1);
+  return ((data as { forum_topic_title: string | null }[] | null)?.[0]?.forum_topic_title) || null;
 }
 
 export async function addLike(gameId: string) {
