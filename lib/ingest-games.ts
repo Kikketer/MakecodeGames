@@ -1,4 +1,5 @@
 import { supabaseServer } from "@/lib/supabase-server";
+import { getAlgoliaWriteClient, GAMES_INDEX, FORUM_TOPICS_INDEX } from "@/lib/algolia";
 
 const FORUM_BASE = "https://forum.makecode.com";
 const MAKECODE_BASE = "https://arcade.makecode.com";
@@ -51,6 +52,76 @@ type MakeCodeMeta = {
 type CategoryMap = Map<number, string>;
 
 const makeCodeUrlPattern = /https?:\/\/(?:arcade\.)?makecode\.com\/[A-Za-z0-9_\-]+/g;
+
+async function indexGame(gameId: string) {
+  const client = getAlgoliaWriteClient();
+  if (!client) return;
+
+  try {
+    const { data } = await supabaseServer
+      .from("games")
+      .select("id, title, description, author_username, thumb_url, game_url, first_seen_at")
+      .eq("id", gameId)
+      .single();
+
+    const game = data as {
+      id: string;
+      title: string;
+      description: string | null;
+      author_username: string | null;
+      thumb_url: string;
+      game_url: string;
+      first_seen_at: string;
+    } | null;
+
+    if (!game) return;
+
+    await client.saveObject({
+      indexName: GAMES_INDEX,
+      body: {
+        objectID: game.id,
+        title: game.title,
+        description: game.description,
+        author_username: game.author_username,
+        thumb_url: game.thumb_url,
+        game_url: game.game_url,
+        first_seen_at: new Date(game.first_seen_at).getTime(),
+      },
+    });
+  } catch (error) {
+    console.error(`Failed to index game ${gameId}:`, error);
+  }
+}
+
+async function indexForumTopic(
+  topicId: number,
+  topicTitle: string,
+  categoryName: string,
+  replyCount: number,
+  viewCount: number,
+  firstSeenAt?: string
+) {
+  const client = getAlgoliaWriteClient();
+  if (!client) return;
+
+  try {
+    const firstSeen = firstSeenAt ? new Date(firstSeenAt).getTime() : Date.now();
+    await client.saveObject({
+      indexName: FORUM_TOPICS_INDEX,
+      body: {
+        objectID: String(topicId),
+        forum_topic_id: topicId,
+        title: topicTitle,
+        category_name: categoryName,
+        reply_count: replyCount,
+        view_count: viewCount,
+        first_seen_at: firstSeen,
+      },
+    });
+  } catch (error) {
+    console.error(`Failed to index forum topic ${topicId}:`, error);
+  }
+}
 
 async function getCategories(): Promise<CategoryMap> {
   const site = await fetchJson<{
@@ -137,6 +208,7 @@ async function upsertGame(shareUrl: string, meta: MakeCodeMeta, author: { user_i
       })
       .eq("id", existing[0].id);
     if (error) throw error;
+    void indexGame(existing[0].id as string);
     return existing[0].id as string;
   }
 
@@ -158,6 +230,7 @@ async function upsertGame(shareUrl: string, meta: MakeCodeMeta, author: { user_i
     .single();
 
   if (error || !inserted) throw error || new Error("failed to insert game");
+  void indexGame(inserted.id as string);
   return inserted.id as string;
 }
 
@@ -173,7 +246,8 @@ async function upsertForumPost(
   replyCount: number,
   viewCount: number,
   reactionCount: number,
-  linkClicks: number
+  linkClicks: number,
+  firstSeenAt?: string
 ) {
   const forumUrl = `${FORUM_BASE}/t/${topicSlug}/${topicId}/${post.post_number}`;
   const now = new Date().toISOString();
@@ -199,6 +273,7 @@ async function upsertForumPost(
     { onConflict: "game_id, forum_topic_id, forum_post_id" }
   );
   if (error) throw error;
+  void indexForumTopic(topicId, topicTitle, categoryName, Math.max(0, replyCount - 1), viewCount, firstSeenAt);
 }
 
 function shortJamTitle(title: string): string {
@@ -255,7 +330,8 @@ export async function ingestPost(
     topic.posts_count || 0,
     topic.views || 0,
     reactionCount ?? (post.reaction_users_count ?? 0),
-    linkClicks ?? 0
+    linkClicks ?? 0,
+    topic.created_at
   );
   return gameId;
 }
