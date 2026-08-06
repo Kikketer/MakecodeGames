@@ -59,6 +59,11 @@ export async function ingestJamTopicChildWorkflow(
   completionTokenArg: string
 ) {
   "use workflow";
+  // Shows up in this run's Logs tab in Vercel Observability, so it's easy
+  // to tell which topic a given child run is working on at a glance
+  // (also visible in the run's recorded Input, but that requires opening
+  // the run and inspecting the raw args).
+  console.log(`[ingest] jam topic ${topicId}`);
   await runChildWithCompletion(
     () => ingestJamTopic(topicId, lastIngestAtIso ? new Date(lastIngestAtIso) : undefined),
     completionTokenArg
@@ -70,6 +75,7 @@ export async function ingestCategoryTopicChildWorkflow(
   completionTokenArg: string
 ) {
   "use workflow";
+  console.log(`[ingest] topic ${topic.id} "${topic.title}" (${topic.posts_count} posts)`);
   await runChildWithCompletion(() => ingestSingleCategoryTopic(topic), completionTokenArg);
 }
 
@@ -115,6 +121,11 @@ export async function ingestOnceWorkflow() {
   const startedAt = new Date().toISOString();
 
   const activeTopics = await listActiveCategoryTopics(5, 20, lastIngestAt);
+  console.log(
+    `[ingest] fanning out to ${activeTopics.length + 1} child workflows: jam-44801, ${activeTopics
+      .map((t) => `topic-${t.id} ("${t.title}")`)
+      .join(", ")}`
+  );
 
   const settled = await Promise.allSettled([
     startAndWaitForChild("jam-44801", (token) => spawnJamChild(lastIngestAtIso, token)),
