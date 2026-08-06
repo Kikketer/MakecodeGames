@@ -1,5 +1,7 @@
 import { ingestOnce } from "@/lib/ingest-games";
 
+export const maxDuration = 300;
+
 export async function GET(request: Request) {
   const auth = request.headers.get("authorization");
   const secret = process.env.INGEST_SECRET;

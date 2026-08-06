@@ -260,30 +260,6 @@ export async function ingestPost(
   return gameId;
 }
 
-async function refreshPostReactionsFromPost(
-  post: DiscoursePost,
-  topicId: number,
-  topicTitle: string,
-  linkClicks?: Map<string, number>
-) {
-  const urls = extractShareUrls(post.cooked);
-  const clicks = urls.length ? (linkClicks?.get(urls[0]) ?? 0) : 0;
-  const update: Record<string, unknown> = {
-    reaction_count: post.reaction_users_count ?? 0,
-    reaction_refreshed_at: new Date().toISOString(),
-    forum_topic_title: topicTitle,
-  };
-  if (clicks > 0) {
-    update.link_clicks = clicks;
-  }
-  const { error } = await supabaseServer
-    .from("game_forum_posts")
-    .update(update)
-    .eq("forum_topic_id", topicId)
-    .eq("forum_post_id", post.id);
-  if (error) throw error;
-}
-
 async function refreshKnownPostMetadata(
   post: DiscoursePost,
   topic: DiscourseTopic,
@@ -393,27 +369,29 @@ type IngestTopicOptions = {
   delayMs?: number;
 };
 
-async function ingestTopic(
+type ProcessTopicPostsOptions = {
+  jamId?: string;
+  skipFirstPost?: boolean;
+};
+
+async function processTopicPosts(
+  posts: DiscoursePost[],
   topic: DiscourseTopic,
   categoryMap: CategoryMap,
-  options: IngestTopicOptions = {}
+  knownIds: Set<number>,
+  linkClicks: Map<string, number>,
+  delayMs: number,
+  options: ProcessTopicPostsOptions = {}
 ): Promise<{ games: number; errors: string[] }> {
-  const effectiveCutoff = options.cutoff || new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
-  const delayMs = options.delayMs ?? 100;
-  const [knownIds, { posts: recentPosts, linkClicks }] = await Promise.all([
-    getKnownPostIds(topic.id),
-    fetchRecentTopicPosts(topic.id, effectiveCutoff, options.firstPage),
-  ]);
-
   const errors: string[] = [];
   let games = 0;
 
-  await batchWithDelay(recentPosts, CONCURRENCY_LIMIT, delayMs, async (post) => {
+  await batchWithDelay(posts, CONCURRENCY_LIMIT, delayMs, async (post) => {
     if (options.skipFirstPost && post.post_number === 1) return;
 
     try {
       if (knownIds.has(post.id)) {
-        await refreshPostReactionsFromPost(post, topic.id, topic.title, linkClicks);
+        await refreshKnownPostMetadata(post, topic, linkClicks);
       } else {
         const urls = extractShareUrls(post.cooked);
         for (const url of urls) {
@@ -426,18 +404,43 @@ async function ingestTopic(
     }
   });
 
-  const recentIds = new Set(recentPosts.map((p) => p.id));
-  const historicalIds = [...knownIds].filter((id) => !recentIds.has(id));
-
-  await batchWithDelay(historicalIds, CONCURRENCY_LIMIT, delayMs, async (forumPostId) => {
-    try {
-      await refreshSinglePostReactions(forumPostId);
-    } catch (e) {
-      errors.push(e instanceof Error ? e.message : String(e));
-    }
-  });
-
   return { games, errors };
+}
+
+async function ingestTopic(
+  topic: DiscourseTopic,
+  categoryMap: CategoryMap,
+  options: IngestTopicOptions = {}
+): Promise<{ games: number; errors: string[] }> {
+  const effectiveCutoff = options.cutoff || new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+  const delayMs = options.delayMs ?? 100;
+  const [knownIds, { posts: recentPosts }] = await Promise.all([
+    getKnownPostIds(topic.id),
+    fetchRecentTopicPosts(topic.id, effectiveCutoff, options.firstPage),
+  ]);
+
+  if (recentPosts.length === 0) {
+    const errors: string[] = [];
+    const historicalIds = [...knownIds];
+
+    await batchWithDelay(historicalIds, CONCURRENCY_LIMIT, delayMs, async (forumPostId) => {
+      try {
+        await refreshSinglePostReactions(forumPostId);
+      } catch (e) {
+        errors.push(e instanceof Error ? e.message : String(e));
+      }
+    });
+
+    return { games: 0, errors };
+  }
+
+  // The topic has been recently active: fetch the whole thread so an older
+  // game post that never made it into a "recent" window still gets ingested.
+  const { posts: allPosts, linkClicks: allLinkClicks } = await fetchAllTopicPosts(topic.id);
+  return processTopicPosts(allPosts, topic, categoryMap, knownIds, allLinkClicks, 1000, {
+    jamId: options.jamId,
+    skipFirstPost: options.skipFirstPost,
+  });
 }
 
 export async function ingestJamTopic(
@@ -525,28 +528,11 @@ async function backfillTopic(
   const delayMs = options.delayMs ?? 1000;
   const knownIds = await getKnownPostIds(topic.id);
   const { posts, linkClicks } = await fetchAllTopicPosts(topic.id);
-  const errors: string[] = [];
-  let games = 0;
 
-  await batchWithDelay(posts, CONCURRENCY_LIMIT, delayMs, async (post) => {
-    if (options.skipFirstPost && post.post_number === 1) return;
-
-    try {
-      if (knownIds.has(post.id)) {
-        await refreshKnownPostMetadata(post, topic, linkClicks);
-      } else {
-        const urls = extractShareUrls(post.cooked);
-        for (const url of urls) {
-          const gameId = await ingestPost(url, post, topic, categoryMap, options.jamId, undefined, linkClicks.get(url));
-          if (gameId) games++;
-        }
-      }
-    } catch (e) {
-      errors.push(e instanceof Error ? e.message : String(e));
-    }
+  return processTopicPosts(posts, topic, categoryMap, knownIds, linkClicks, delayMs, {
+    jamId: options.jamId,
+    skipFirstPost: options.skipFirstPost,
   });
-
-  return { games, errors };
 }
 
 export async function backfillJamTopic(
