@@ -49,9 +49,26 @@ type MakeCodeMeta = {
   description?: string;
 };
 
+export type { DiscourseTopic };
+
 type CategoryMap = Map<number, string>;
 
 const makeCodeUrlPattern = /https?:\/\/(?:arcade\.)?makecode\.com\/[A-Za-z0-9_\-]+/g;
+
+async function fetchSiteJsonStep(): Promise<{
+  categories: { id: number; name: string; slug: string; parent_category_id?: number }[];
+} | null> {
+  "use step";
+  return fetchJson(`${FORUM_BASE}/site.json`);
+}
+
+async function upsertCategoriesStep(
+  rows: { id: number; name: string; slug: string; parent_category_id: number | null }[]
+): Promise<void> {
+  "use step";
+  const { error } = await supabaseServer.from("forum_categories").upsert(rows, { onConflict: "id" });
+  if (error) throw error;
+}
 
 async function indexGame(gameId: string) {
   const client = getAlgoliaWriteClient();
@@ -123,10 +140,13 @@ async function indexForumTopic(
   }
 }
 
+/**
+ * Fetches the forum's category list, upserts it, and returns a lookup map.
+ * Composed of steps only (no direct I/O of its own), so it's safe to call
+ * directly from a workflow function.
+ */
 async function getCategories(): Promise<CategoryMap> {
-  const site = await fetchJson<{
-    categories: { id: number; name: string; slug: string; parent_category_id?: number }[];
-  }>(`${FORUM_BASE}/site.json`);
+  const site = await fetchSiteJsonStep();
   const rows = (site?.categories || []).map((c) => ({
     id: c.id,
     name: c.name,
@@ -135,10 +155,7 @@ async function getCategories(): Promise<CategoryMap> {
   }));
 
   if (rows.length) {
-    const { error } = await supabaseServer
-      .from("forum_categories")
-      .upsert(rows, { onConflict: "id" });
-    if (error) throw error;
+    await upsertCategoriesStep(rows);
   }
 
   const map: CategoryMap = new Map();
@@ -146,6 +163,11 @@ async function getCategories(): Promise<CategoryMap> {
   return map;
 }
 
+/**
+ * Plain fetch helper - intentionally NOT a step, so functions that make
+ * several of these calls (e.g. paging through a thread) can be a single
+ * plain orchestrating function without nesting steps inside steps.
+ */
 async function fetchJson<T>(url: string): Promise<T | null> {
   for (let attempt = 0; attempt < 5; attempt++) {
     const res = await fetch(url, {
@@ -173,6 +195,7 @@ function shareUrlToId(shareUrl: string): string {
 }
 
 async function normalizeMakeCode(urlId: string): Promise<MakeCodeMeta | null> {
+  "use step";
   const json = await fetchJson<Record<string, unknown>>(
     `${MAKECODE_BASE}/api/${encodeURIComponent(urlId)}`
   );
@@ -187,6 +210,7 @@ async function normalizeMakeCode(urlId: string): Promise<MakeCodeMeta | null> {
 }
 
 async function upsertGame(shareUrl: string, meta: MakeCodeMeta, author: { user_id: number; username: string }) {
+  "use step";
   const thumbUrl = `https://cdn.makecode.com/api/${meta.id}/thumb`;
   const { data: existing } = await supabaseServer
     .from("games")
@@ -249,6 +273,7 @@ async function upsertForumPost(
   linkClicks: number,
   firstSeenAt?: string
 ) {
+  "use step";
   const forumUrl = `${FORUM_BASE}/t/${topicSlug}/${topicId}/${post.post_number}`;
   const now = new Date().toISOString();
   const { error } = await supabaseServer.from("game_forum_posts").upsert(
@@ -283,6 +308,7 @@ function shortJamTitle(title: string): string {
 }
 
 async function upsertJam(topic: DiscourseTopic): Promise<string | undefined> {
+  "use step";
   const title = shortJamTitle(topic.title);
   const { data, error } = await supabaseServer
     .from("game_jams")
@@ -336,37 +362,12 @@ export async function ingestPost(
   return gameId;
 }
 
-async function refreshPostReactionsFromPost(
-  post: DiscoursePost,
-  topicId: number,
-  topicTitle: string,
-  linkClicks?: Map<string, number>
-) {
-  const urls = extractShareUrls(post.cooked);
-  const clicks = urls.length ? (linkClicks?.get(urls[0]) ?? 0) : 0;
-  const update: Record<string, unknown> = {
-    reaction_count: post.reaction_users_count ?? 0,
-    reaction_refreshed_at: new Date().toISOString(),
-    forum_topic_title: topicTitle,
-  };
-  if (clicks > 0) {
-    update.link_clicks = clicks;
-  }
-  const { error } = await supabaseServer
-    .from("game_forum_posts")
-    .update(update)
-    .eq("forum_topic_id", topicId)
-    .eq("forum_post_id", post.id);
-  if (error) throw error;
-}
-
 async function refreshKnownPostMetadata(
   post: DiscoursePost,
   topic: DiscourseTopic,
-  linkClicks: Map<string, number>
+  clicks: number
 ) {
-  const urls = extractShareUrls(post.cooked);
-  const clicks = urls.length ? (linkClicks.get(urls[0]) ?? 0) : 0;
+  "use step";
   const { error } = await supabaseServer
     .from("game_forum_posts")
     .update({
@@ -381,6 +382,7 @@ async function refreshKnownPostMetadata(
 }
 
 async function refreshSinglePostReactions(forumPostId: number) {
+  "use step";
   const post = await fetchJson<DiscoursePost>(`${FORUM_BASE}/posts/${forumPostId}.json`);
   if (!post) return;
 
@@ -394,6 +396,15 @@ async function refreshSinglePostReactions(forumPostId: number) {
   if (error) throw error;
 }
 
+/** Fetches a single topic page. Kept separate from `fetchJson` so it can be
+ * its own step - functions that page through a thread (below) call this in
+ * a loop and stay plain themselves, instead of nesting steps inside steps. */
+async function fetchTopicPageStep(topicId: number, page?: number): Promise<TopicPage | null> {
+  "use step";
+  const url = page ? `${FORUM_BASE}/t/${topicId}.json?page=${page}` : `${FORUM_BASE}/t/${topicId}.json`;
+  return fetchJson<TopicPage>(url);
+}
+
 function buildLinkClicksMap(page: TopicPage | null): Map<string, number> {
   const map = new Map<string, number>();
   if (!page?.details?.links) return map;
@@ -403,41 +414,54 @@ function buildLinkClicksMap(page: TopicPage | null): Map<string, number> {
   return map;
 }
 
-async function fetchRecentTopicPosts(
+/**
+ * Walks a topic's pages back-to-front, stopping as soon as it hits a page
+ * where every post is already known (already has a `game_forum_posts` row).
+ * This lets a mostly-ingested thread that gets bumped by one new reply only
+ * re-fetch the handful of trailing pages that could contain unseen posts,
+ * instead of re-crawling the whole thread.
+ */
+async function fetchThreadTailPosts(
   topicId: number,
-  cutoff: Date,
+  knownIds: Set<number>,
   firstPage?: TopicPage
-): Promise<{ posts: DiscoursePost[]; linkClicks: Map<string, number> }> {
-  const first = firstPage || (await fetchJson<TopicPage>(`${FORUM_BASE}/t/${topicId}.json`));
-  if (!first) return { posts: [], linkClicks: new Map() };
+): Promise<{ posts: DiscoursePost[]; linkClicks: Map<string, number>; crawledIds: Set<number> }> {
+  const first = firstPage || (await fetchTopicPageStep(topicId));
+  if (!first) return { posts: [], linkClicks: new Map(), crawledIds: new Set() };
 
   const linkClicks = buildLinkClicksMap(first);
   const perPage = first.post_stream.posts.length || 20;
   const totalPages = Math.ceil(first.posts_count / perPage);
   const posts: DiscoursePost[] = [];
+  const crawledIds = new Set<number>();
 
   for (let page = totalPages; page >= 1; page--) {
-    const pageData = page === 1 ? first : await fetchJson<TopicPage>(`${FORUM_BASE}/t/${topicId}.json?page=${page}`);
+    const pageData = page === 1 ? first : await fetchTopicPageStep(topicId, page);
     if (!pageData) continue;
 
     const pagePosts = pageData.post_stream.posts;
-    const newer = pagePosts.filter((p) => p.created_at && new Date(p.created_at) >= cutoff);
-    posts.push(...newer);
+    posts.push(...pagePosts);
+    for (const post of pagePosts) crawledIds.add(post.id);
 
-    const oldestOnPage = pagePosts[0];
-    if (oldestOnPage?.created_at && new Date(oldestOnPage.created_at) < cutoff) break;
+    const pageFullyKnown = pagePosts.length > 0 && pagePosts.every((post) => knownIds.has(post.id));
+    if (pageFullyKnown) break;
   }
 
-  return { posts, linkClicks };
+  return { posts, linkClicks, crawledIds };
 }
 
-async function getKnownPostIds(topicId: number): Promise<Set<number>> {
+async function getKnownPostIdsStep(topicId: number): Promise<number[]> {
+  "use step";
   const { data, error } = await supabaseServer
     .from("game_forum_posts")
     .select("forum_post_id")
     .eq("forum_topic_id", topicId);
   if (error) throw error;
-  return new Set((data || []).map((r) => r.forum_post_id as number));
+  return (data || []).map((r) => r.forum_post_id as number);
+}
+
+async function getKnownPostIds(topicId: number): Promise<Set<number>> {
+  return new Set(await getKnownPostIdsStep(topicId));
 }
 
 function sleep(ms: number): Promise<void> {
@@ -464,32 +488,35 @@ async function batchWithDelay<T>(
 type IngestTopicOptions = {
   jamId?: string;
   skipFirstPost?: boolean;
-  cutoff?: Date;
   firstPage?: TopicPage;
   delayMs?: number;
 };
 
-async function ingestTopic(
+type ProcessTopicPostsOptions = {
+  jamId?: string;
+  skipFirstPost?: boolean;
+};
+
+async function processTopicPosts(
+  posts: DiscoursePost[],
   topic: DiscourseTopic,
   categoryMap: CategoryMap,
-  options: IngestTopicOptions = {}
+  knownIds: Set<number>,
+  linkClicks: Map<string, number>,
+  delayMs: number,
+  options: ProcessTopicPostsOptions = {}
 ): Promise<{ games: number; errors: string[] }> {
-  const effectiveCutoff = options.cutoff || new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
-  const delayMs = options.delayMs ?? 100;
-  const [knownIds, { posts: recentPosts, linkClicks }] = await Promise.all([
-    getKnownPostIds(topic.id),
-    fetchRecentTopicPosts(topic.id, effectiveCutoff, options.firstPage),
-  ]);
-
   const errors: string[] = [];
   let games = 0;
 
-  await batchWithDelay(recentPosts, CONCURRENCY_LIMIT, delayMs, async (post) => {
+  await batchWithDelay(posts, CONCURRENCY_LIMIT, delayMs, async (post) => {
     if (options.skipFirstPost && post.post_number === 1) return;
 
     try {
       if (knownIds.has(post.id)) {
-        await refreshPostReactionsFromPost(post, topic.id, topic.title, linkClicks);
+        const urls = extractShareUrls(post.cooked);
+        const clicks = urls.length ? (linkClicks.get(urls[0]) ?? 0) : 0;
+        await refreshKnownPostMetadata(post, topic, clicks);
       } else {
         const urls = extractShareUrls(post.cooked);
         for (const url of urls) {
@@ -502,10 +529,32 @@ async function ingestTopic(
     }
   });
 
-  const recentIds = new Set(recentPosts.map((p) => p.id));
-  const historicalIds = [...knownIds].filter((id) => !recentIds.has(id));
+  return { games, errors };
+}
 
-  await batchWithDelay(historicalIds, CONCURRENCY_LIMIT, delayMs, async (forumPostId) => {
+async function ingestTopic(
+  topic: DiscourseTopic,
+  categoryMap: CategoryMap,
+  options: IngestTopicOptions = {}
+): Promise<{ games: number; errors: string[] }> {
+  const knownIds = await getKnownPostIds(topic.id);
+  // A topic we've never looked at before is treated like a mini backfill
+  // (slower pacing); a topic we've already mostly mined only needs a small
+  // tail crawl, so the default (fast) pacing is fine.
+  const delayMs = knownIds.size === 0 ? 1000 : (options.delayMs ?? 100);
+
+  const { posts, linkClicks, crawledIds } = await fetchThreadTailPosts(topic.id, knownIds, options.firstPage);
+
+  const { games, errors } = await processTopicPosts(posts, topic, categoryMap, knownIds, linkClicks, delayMs, {
+    jamId: options.jamId,
+    skipFirstPost: options.skipFirstPost,
+  });
+
+  // Anything known but outside the crawled tail wasn't re-fetched as part of
+  // a page, but its reactions/click count may still have changed - poke it
+  // individually by post id instead of re-crawling its page.
+  const uncrawledKnownIds = [...knownIds].filter((id) => !crawledIds.has(id));
+  await batchWithDelay(uncrawledKnownIds, CONCURRENCY_LIMIT, delayMs, async (forumPostId) => {
     try {
       await refreshSinglePostReactions(forumPostId);
     } catch (e) {
@@ -516,21 +565,65 @@ async function ingestTopic(
   return { games, errors };
 }
 
+async function fetchCategoryListingStep(
+  categoryId: number,
+  page?: number
+): Promise<{ topic_list: { topics: DiscourseTopic[] } } | null> {
+  "use step";
+  const url = page
+    ? `${FORUM_BASE}/c/${categoryId}.json?page=${page}`
+    : `${FORUM_BASE}/c/${categoryId}.json`;
+  return fetchJson(url);
+}
+
 export async function ingestJamTopic(
   topicId: number,
   lastIngestAt?: Date,
   delayMs = 100
 ): Promise<{ games: number; errors: string[] }> {
   const categoryMap = await getCategories();
-  const first = await fetchJson<TopicPage>(`${FORUM_BASE}/t/${topicId}.json`);
+  const first = await fetchTopicPageStep(topicId);
   if (!first) return { games: 0, errors: [`topic ${topicId} not found`] };
 
   const topic: DiscourseTopic = { ...first, id: topicId };
   const jam = await upsertJam(topic);
-  const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
-  const cutoff = lastIngestAt ? new Date(lastIngestAt.getTime() - 24 * 60 * 60 * 1000) : twoDaysAgo;
 
-  return ingestTopic(topic, categoryMap, { jamId: jam, skipFirstPost: true, cutoff, firstPage: first, delayMs });
+  return ingestTopic(topic, categoryMap, { jamId: jam, skipFirstPost: true, firstPage: first, delayMs });
+}
+
+/**
+ * Lists the topics from a category that are worth checking during a daily
+ * ingest run (bumped within the last 2 days, or everything on the first
+ * ever run). Shared by the synchronous `ingestCategoryTopics` path and the
+ * per-topic-child-workflow fan-out in `workflows/ingest.ts`.
+ */
+export async function listActiveCategoryTopics(
+  categoryId: number,
+  limit: number,
+  lastIngestAt?: Date
+): Promise<DiscourseTopic[]> {
+  const category = await fetchCategoryListingStep(categoryId);
+  if (!category) return [];
+
+  const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+
+  return category.topic_list.topics
+    .filter((t) => {
+      if (!lastIngestAt) return true;
+      const bumpedAt = t.bumped_at ? new Date(t.bumped_at) : null;
+      return bumpedAt && bumpedAt >= twoDaysAgo;
+    })
+    .slice(0, limit);
+}
+
+/** Ingests a single category topic, fetching its own category map. Exported
+ * so it can be run inside its own child workflow (one per topic). */
+export async function ingestSingleCategoryTopic(
+  topic: DiscourseTopic,
+  delayMs = 100
+): Promise<{ games: number; errors: string[] }> {
+  const categoryMap = await getCategories();
+  return ingestTopic(topic, categoryMap, { delayMs });
 }
 
 export async function ingestCategoryTopics(
@@ -539,28 +632,13 @@ export async function ingestCategoryTopics(
   lastIngestAt?: Date,
   delayMs = 100
 ): Promise<{ games: number; errors: string[] }> {
-  const category = await fetchJson<{ topic_list: { topics: DiscourseTopic[] } }>(
-    `${FORUM_BASE}/c/${categoryId}.json`
-  );
-  if (!category) return { games: 0, errors: [`category ${categoryId} not found`] };
-
+  const topics = await listActiveCategoryTopics(categoryId, limit, lastIngestAt);
   const categoryMap = await getCategories();
   const errors: string[] = [];
   let games = 0;
 
-  const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
-  const cutoff = lastIngestAt ? new Date(lastIngestAt.getTime() - 24 * 60 * 60 * 1000) : twoDaysAgo;
-
-  const topics = category.topic_list.topics
-    .filter((t) => {
-      if (!lastIngestAt) return true;
-      const bumpedAt = t.bumped_at ? new Date(t.bumped_at) : null;
-      return bumpedAt && bumpedAt >= twoDaysAgo;
-    })
-    .slice(0, limit);
-
   for (const topic of topics) {
-    const result = await ingestTopic(topic, categoryMap, { cutoff, delayMs });
+    const result = await ingestTopic(topic, categoryMap, { delayMs });
     games += result.games;
     errors.push(...result.errors);
   }
@@ -569,7 +647,7 @@ export async function ingestCategoryTopics(
 }
 
 async function fetchAllTopicPosts(topicId: number): Promise<{ topic: DiscourseTopic | null; posts: DiscoursePost[]; linkClicks: Map<string, number> }> {
-  const first = await fetchJson<TopicPage>(`${FORUM_BASE}/t/${topicId}.json`);
+  const first = await fetchTopicPageStep(topicId);
   if (!first) return { topic: null, posts: [], linkClicks: new Map() };
 
   const linkClicks = buildLinkClicksMap(first);
@@ -578,7 +656,7 @@ async function fetchAllTopicPosts(topicId: number): Promise<{ topic: DiscourseTo
   const pages = Math.ceil(first.posts_count / perPage);
 
   for (let page = 2; page <= pages; page++) {
-    const next = await fetchJson<TopicPage>(`${FORUM_BASE}/t/${topicId}.json?page=${page}`);
+    const next = await fetchTopicPageStep(topicId, page);
     if (!next) break;
     posts.push(...next.post_stream.posts);
   }
@@ -601,28 +679,11 @@ async function backfillTopic(
   const delayMs = options.delayMs ?? 1000;
   const knownIds = await getKnownPostIds(topic.id);
   const { posts, linkClicks } = await fetchAllTopicPosts(topic.id);
-  const errors: string[] = [];
-  let games = 0;
 
-  await batchWithDelay(posts, CONCURRENCY_LIMIT, delayMs, async (post) => {
-    if (options.skipFirstPost && post.post_number === 1) return;
-
-    try {
-      if (knownIds.has(post.id)) {
-        await refreshKnownPostMetadata(post, topic, linkClicks);
-      } else {
-        const urls = extractShareUrls(post.cooked);
-        for (const url of urls) {
-          const gameId = await ingestPost(url, post, topic, categoryMap, options.jamId, undefined, linkClicks.get(url));
-          if (gameId) games++;
-        }
-      }
-    } catch (e) {
-      errors.push(e instanceof Error ? e.message : String(e));
-    }
+  return processTopicPosts(posts, topic, categoryMap, knownIds, linkClicks, delayMs, {
+    jamId: options.jamId,
+    skipFirstPost: options.skipFirstPost,
   });
-
-  return { games, errors };
 }
 
 export async function backfillJamTopic(
@@ -630,7 +691,7 @@ export async function backfillJamTopic(
   delayMs = 1000
 ): Promise<{ games: number; errors: string[] }> {
   const categoryMap = await getCategories();
-  const first = await fetchJson<TopicPage>(`${FORUM_BASE}/t/${topicId}.json`);
+  const first = await fetchTopicPageStep(topicId);
   if (!first) return { games: 0, errors: [`topic ${topicId} not found`] };
 
   const topic: DiscourseTopic = { ...first, id: topicId };
@@ -663,8 +724,7 @@ export async function backfillCategoryTopics(
   const topics: DiscourseTopic[] = [];
   let page = 0;
   while (topics.length < limit) {
-    const url = page === 0 ? `${FORUM_BASE}/c/${categoryId}.json` : `${FORUM_BASE}/c/${categoryId}.json?page=${page}`;
-    const category = await fetchJson<{ topic_list: { topics: DiscourseTopic[] } }>(url);
+    const category = await fetchCategoryListingStep(categoryId, page === 0 ? undefined : page);
     if (!category || !category.topic_list.topics.length) break;
 
     const pageTopics = category.topic_list.topics;
@@ -745,6 +805,52 @@ export async function backfillAll(
   result.posts = count || 0;
 
   return result;
+}
+
+// --- Steps used by `workflows/ingest.ts`'s ingestOnceWorkflow ---
+// (ingestOnce() below is the legacy synchronous, single-request entrypoint
+// and keeps its own inline calls; these are separate step-wrapped
+// equivalents for the workflow-based entrypoint so its non-deterministic
+// work is durably tracked.)
+
+export async function readLastIngestAtStep(): Promise<string | undefined> {
+  "use step";
+  const { data: lastLog } = await supabaseServer
+    .from("ingest_log")
+    .select("finished_at")
+    .order("finished_at", { ascending: false })
+    .limit(1)
+    .single();
+  return (lastLog?.finished_at as string | undefined) ?? undefined;
+}
+
+export async function countGameForumPostsStep(): Promise<number> {
+  "use step";
+  const { count } = await supabaseServer.from("game_forum_posts").select("*", { count: "exact", head: true });
+  return count || 0;
+}
+
+export async function snapshotGameStatsStep(): Promise<void> {
+  "use step";
+  const { error } = await supabaseServer.rpc("snapshot_game_stats");
+  if (error) throw error;
+}
+
+export async function refreshGameDailyStatsStep(): Promise<void> {
+  "use step";
+  const { error } = await supabaseServer.rpc("refresh_game_daily_stats");
+  if (error) throw error;
+}
+
+export async function writeIngestLogStep(entry: {
+  started_at: string;
+  finished_at: string;
+  games: number;
+  posts: number;
+  errors: string[];
+}): Promise<void> {
+  "use step";
+  await supabaseServer.from("ingest_log").insert(entry);
 }
 
 export async function ingestOnce(): Promise<IngestResult> {

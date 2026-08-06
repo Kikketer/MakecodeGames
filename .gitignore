@@ -44,3 +44,4 @@ next-env.d.ts
 # local backfill artifacts
 backfill.log*
 .backfill-checkpoint.json
+/.swc
