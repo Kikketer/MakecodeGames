@@ -14,12 +14,12 @@ export default async function GamesPage({
   const activeJam = Array.isArray(params.jam) ? params.jam[0] : params.jam;
   const limit = activeCategory === "game-jams" ? 100 : 10;
 
-  const [categories, jams, hot, trending, newest] = await Promise.all([
+  const [categories, jams, newest, hot, trending] = await Promise.all([
     listCategories(),
     listJams(),
+    listGames({ category: activeCategory, jam: activeJam, sort: "newest", limit }),
     listGames({ category: activeCategory, jam: activeJam, sort: "hot", limit }),
     listGames({ category: activeCategory, jam: activeJam, sort: "trending", limit }),
-    listGames({ category: activeCategory, jam: activeJam, sort: "newest", limit }),
   ]);
 
   const isJam = activeCategory === "game-jams";
@@ -34,9 +34,9 @@ export default async function GamesPage({
         <GameJamList games={hot} />
       ) : (
         <div className="flex flex-col gap-8">
+          <GameRow title="Newest" games={newest} />
           <GameRow title="Hot" games={hot} />
           <GameRow title="Trending" games={trending} />
-          <GameRow title="Newest" games={newest} />
         </div>
       )}
     </main>
