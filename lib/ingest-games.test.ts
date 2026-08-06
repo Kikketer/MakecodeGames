@@ -177,8 +177,10 @@ describe("ingestCategoryTopics", () => {
     vi.unstubAllGlobals();
   });
 
-  it("fetches the whole thread once a bumped topic has a recent post, ingesting older game posts too", async () => {
-    mockSupabase.from = vi.fn(() => {
+  it("only re-crawls the trailing pages of a mostly-ingested thread and pokes older known posts by id", async () => {
+    // Topic 200 has 3 pages (posts 1-6). Pages 1 and 2 (posts 1-4) have
+    // already been fully ingested; only post 6 (on page 3) is new.
+    mockSupabase.from = vi.fn((table: string) => {
       const calls: string[] = [];
       const chain = {
         select: () => { calls.push("select"); return chain; },
@@ -187,9 +189,13 @@ describe("ingestCategoryTopics", () => {
         single: () => { calls.push("single"); return chain; },
         insert: () => { calls.push("insert"); return chain; },
         upsert: () => { calls.push("upsert"); return chain; },
+        update: () => { calls.push("update"); return chain; },
         then: (resolve: (value: unknown) => void) => {
-          if (calls.includes("upsert")) return resolve({ error: null });
-          if (calls.includes("insert") && calls.includes("single")) return resolve({ data: { id: "game-1" }, error: null });
+          if (table === "game_forum_posts" && calls.includes("select") && calls.includes("eq") && !calls.includes("limit")) {
+            return resolve({ data: [1, 2, 3, 4, 5].map((id) => ({ forum_post_id: id })), error: null });
+          }
+          if (calls.includes("upsert") || calls.includes("update")) return resolve({ error: null });
+          if (calls.includes("insert") && calls.includes("single")) return resolve({ data: { id: "game-6" }, error: null });
           if (calls.includes("select") && calls.includes("limit")) return resolve({ data: [] });
           return resolve({ data: null, error: null });
         },
@@ -201,28 +207,12 @@ describe("ingestCategoryTopics", () => {
       id: 200,
       title: "Cool new game",
       category_id: 5,
-      posts_count: 4,
+      posts_count: 6,
       views: 50,
       post_stream: {
         posts: [
-          {
-            id: 1,
-            post_number: 1,
-            cooked: '<p><a href="https://arcade.makecode.com/88888">old game</a></p>',
-            user_id: 1,
-            username: "player",
-            created_at: "2026-08-01T10:00:00.000Z",
-            reaction_users_count: 2,
-          },
-          {
-            id: 2,
-            post_number: 2,
-            cooked: '<p>older reply</p>',
-            user_id: 2,
-            username: "player2",
-            created_at: "2026-08-01T11:00:00.000Z",
-            reaction_users_count: 1,
-          },
+          { id: 1, post_number: 1, cooked: "<p>topic starter</p>", user_id: 1, username: "player", created_at: "2026-08-01T10:00:00.000Z", reaction_users_count: 2 },
+          { id: 2, post_number: 2, cooked: "<p>older reply</p>", user_id: 2, username: "player2", created_at: "2026-08-01T11:00:00.000Z", reaction_users_count: 1 },
         ],
       },
     });
@@ -230,28 +220,25 @@ describe("ingestCategoryTopics", () => {
       id: 200,
       title: "Cool new game",
       category_id: 5,
-      posts_count: 4,
+      posts_count: 6,
       views: 50,
       post_stream: {
         posts: [
-          {
-            id: 3,
-            post_number: 3,
-            cooked: '<p><a href="https://arcade.makecode.com/99999">game</a></p>',
-            user_id: 1,
-            username: "player",
-            created_at: "2026-08-03T10:00:00.000Z",
-            reaction_users_count: 5,
-          },
-          {
-            id: 4,
-            post_number: 4,
-            cooked: '<p>no link here</p>',
-            user_id: 2,
-            username: "player2",
-            created_at: "2026-08-03T11:00:00.000Z",
-            reaction_users_count: 1,
-          },
+          { id: 3, post_number: 3, cooked: "<p>known reply</p>", user_id: 1, username: "player", created_at: "2026-08-02T10:00:00.000Z", reaction_users_count: 5 },
+          { id: 4, post_number: 4, cooked: "<p>known reply 2</p>", user_id: 2, username: "player2", created_at: "2026-08-02T11:00:00.000Z", reaction_users_count: 1 },
+        ],
+      },
+    });
+    const page3 = jsonResponse({
+      id: 200,
+      title: "Cool new game",
+      category_id: 5,
+      posts_count: 6,
+      views: 50,
+      post_stream: {
+        posts: [
+          { id: 5, post_number: 5, cooked: "<p>known reply 3</p>", user_id: 1, username: "player", created_at: "2026-08-03T10:00:00.000Z", reaction_users_count: 3 },
+          { id: 6, post_number: 6, cooked: '<p><a href="https://arcade.makecode.com/99999">game</a></p>', user_id: 2, username: "player2", created_at: "2026-08-04T09:00:00.000Z", reaction_users_count: 1 },
         ],
       },
     });
@@ -264,7 +251,7 @@ describe("ingestCategoryTopics", () => {
               {
                 id: 200,
                 title: "Cool new game",
-                posts_count: 4,
+                posts_count: 6,
                 bumped_at: "2026-08-04T10:00:00.000Z",
                 category_id: 5,
                 views: 50,
@@ -274,36 +261,37 @@ describe("ingestCategoryTopics", () => {
           },
         })
       )
-      .mockResolvedValueOnce(
-        jsonResponse({
-          categories: [{ id: 5, name: "Games", slug: "games" }],
-        })
-      )
-      // fetchRecentTopicPosts: walks pages to find posts newer than cutoff
+      .mockResolvedValueOnce(jsonResponse({ categories: [{ id: 5, name: "Games", slug: "games" }] }))
+      // fetchThreadTailPosts fetches the topic to get metadata (posts_count etc.);
+      // this payload is treated as page 1's content too.
       .mockResolvedValueOnce(page1)
+      // walks backward from the last page: page 3 has the new post...
+      .mockResolvedValueOnce(page3)
+      // ...page 2 is fully known, so the walk stops there — page 1 is never re-fetched.
       .mockResolvedValueOnce(page2)
-      // topic is active (has recent posts) -> fetchAllTopicPosts walks the whole thread again
-      .mockResolvedValueOnce(page1)
-      .mockResolvedValueOnce(page2)
-      .mockResolvedValueOnce(
-        jsonResponse({ kind: "script", id: "old-abc", name: "Old Game" })
-      )
-      .mockResolvedValueOnce(
-        jsonResponse({ kind: "script", id: "abc-123", name: "Test Game" })
-      );
+      .mockResolvedValueOnce(jsonResponse({ kind: "script", id: "abc-123", name: "Test Game" }))
+      // posts 1 and 2 (on the skipped page 1) still get poked individually for fresh reactions.
+      .mockResolvedValueOnce(jsonResponse({ id: 1, reaction_users_count: 9 }))
+      .mockResolvedValueOnce(jsonResponse({ id: 2, reaction_users_count: 4 }));
 
     const result = await ingestCategoryTopics(5, 10, new Date("2026-08-03T00:00:00.000Z"));
 
-    // Both the older game post (post 1) and the recent one (post 3) get ingested.
-    expect(result.games).toBe(2);
-    expect(mockFetch).toHaveBeenCalledWith("https://forum.makecode.com/c/5.json", {
+    expect(result.games).toBe(1);
+
+    const topicFetches = mockFetch.mock.calls
+      .filter((call) => String(call[0]).includes("/t/200.json"))
+      .map((call) => String(call[0]));
+    expect(topicFetches).toEqual([
+      "https://forum.makecode.com/t/200.json",
+      "https://forum.makecode.com/t/200.json?page=3",
+      "https://forum.makecode.com/t/200.json?page=2",
+    ]);
+    expect(topicFetches).not.toContain("https://forum.makecode.com/t/200.json?page=1");
+
+    expect(mockFetch).toHaveBeenCalledWith("https://forum.makecode.com/posts/1.json", {
       headers: { Accept: "application/json" },
     });
-    const topicFetchCount = mockFetch.mock.calls.filter((call) =>
-      String(call[0]).includes("/t/200.json")
-    ).length;
-    expect(topicFetchCount).toBe(4);
-    expect(mockFetch).toHaveBeenCalledWith("https://forum.makecode.com/t/200.json?page=2", {
+    expect(mockFetch).toHaveBeenCalledWith("https://forum.makecode.com/posts/2.json", {
       headers: { Accept: "application/json" },
     });
   });
@@ -323,8 +311,10 @@ describe("ingestJamTopic", () => {
     vi.unstubAllGlobals();
   });
 
-  it("fetches the whole thread once the jam topic has a recent post", async () => {
-    mockSupabase.from = vi.fn(() => {
+  it("only re-crawls the trailing pages of a mostly-ingested jam thread and pokes older known posts by id", async () => {
+    // Jam topic has 3 pages (posts 1-6). Posts 2-5 are already known; only
+    // post 6 (on the last page) is new. Page 1 should never be re-fetched.
+    mockSupabase.from = vi.fn((table: string) => {
       const calls: string[] = [];
       const chain = {
         select: () => { calls.push("select"); return chain; },
@@ -333,9 +323,13 @@ describe("ingestJamTopic", () => {
         single: () => { calls.push("single"); return chain; },
         insert: () => { calls.push("insert"); return chain; },
         upsert: () => { calls.push("upsert"); return chain; },
+        update: () => { calls.push("update"); return chain; },
         then: (resolve: (value: unknown) => void) => {
-          if (calls.includes("upsert")) return resolve({ error: null });
-          if (calls.includes("insert") && calls.includes("single")) return resolve({ data: { id: "game-1" }, error: null });
+          if (table === "game_forum_posts" && calls.includes("select") && calls.includes("eq") && !calls.includes("limit")) {
+            return resolve({ data: [2, 3, 4, 5].map((id) => ({ forum_post_id: id })), error: null });
+          }
+          if (calls.includes("upsert") || calls.includes("update")) return resolve({ error: null });
+          if (calls.includes("insert") && calls.includes("single")) return resolve({ data: { id: "game-6" }, error: null });
           if (calls.includes("select") && calls.includes("limit")) return resolve({ data: [] });
           return resolve({ data: null, error: null });
         },
@@ -347,19 +341,12 @@ describe("ingestJamTopic", () => {
       id: 44801,
       title: "Jam #42",
       category_id: 13,
-      posts_count: 2,
+      posts_count: 6,
       views: 100,
       post_stream: {
         posts: [
-          {
-            id: 1,
-            post_number: 1,
-            cooked: "<p>Welcome to the jam</p>",
-            user_id: 1,
-            username: "host",
-            created_at: "2026-08-01T00:00:00.000Z",
-            reaction_users_count: 10,
-          },
+          { id: 1, post_number: 1, cooked: "<p>Welcome to the jam</p>", user_id: 1, username: "host", created_at: "2026-08-01T00:00:00.000Z", reaction_users_count: 10 },
+          { id: 2, post_number: 2, cooked: "<p>known entry</p>", user_id: 2, username: "player", created_at: "2026-08-01T10:00:00.000Z", reaction_users_count: 1 },
         ],
       },
     });
@@ -367,39 +354,40 @@ describe("ingestJamTopic", () => {
       id: 44801,
       title: "Jam #42",
       category_id: 13,
-      posts_count: 2,
+      posts_count: 6,
       views: 100,
       post_stream: {
         posts: [
-          {
-            id: 2,
-            post_number: 2,
-            cooked: '<p><a href="https://arcade.makecode.com/77777">game</a></p>',
-            user_id: 2,
-            username: "player",
-            created_at: "2026-08-03T10:00:00.000Z",
-            reaction_users_count: 4,
-          },
+          { id: 3, post_number: 3, cooked: "<p>known entry 2</p>", user_id: 3, username: "player3", created_at: "2026-08-02T10:00:00.000Z", reaction_users_count: 2 },
+          { id: 4, post_number: 4, cooked: "<p>known entry 3</p>", user_id: 4, username: "player4", created_at: "2026-08-02T11:00:00.000Z", reaction_users_count: 3 },
+        ],
+      },
+    });
+    const page3 = jsonResponse({
+      id: 44801,
+      title: "Jam #42",
+      category_id: 13,
+      posts_count: 6,
+      views: 100,
+      post_stream: {
+        posts: [
+          { id: 5, post_number: 5, cooked: "<p>known entry 4</p>", user_id: 5, username: "player5", created_at: "2026-08-03T10:00:00.000Z", reaction_users_count: 4 },
+          { id: 6, post_number: 6, cooked: '<p><a href="https://arcade.makecode.com/77777">game</a></p>', user_id: 6, username: "player6", created_at: "2026-08-04T09:00:00.000Z", reaction_users_count: 0 },
         ],
       },
     });
 
     mockFetch
-      .mockResolvedValueOnce(
-        jsonResponse({
-          categories: [{ id: 13, name: "Jams", slug: "jams" }],
-        })
-      )
+      .mockResolvedValueOnce(jsonResponse({ categories: [{ id: 13, name: "Jams", slug: "jams" }] }))
       // ingestJamTopic fetches page 1 itself and passes it in as the firstPage
       .mockResolvedValueOnce(page1)
-      // fetchRecentTopicPosts walks the remaining page(s)
+      // walks backward from the last page: page 3 has the new post...
+      .mockResolvedValueOnce(page3)
+      // ...page 2 is fully known, so the walk stops there — page 1 is never re-fetched.
       .mockResolvedValueOnce(page2)
-      // topic is active (has a recent post) -> fetchAllTopicPosts walks the whole thread again
-      .mockResolvedValueOnce(page1)
-      .mockResolvedValueOnce(page2)
-      .mockResolvedValueOnce(
-        jsonResponse({ kind: "script", id: "abc-777", name: "Jam Game" })
-      );
+      .mockResolvedValueOnce(jsonResponse({ kind: "script", id: "abc-777", name: "Jam Game" }))
+      // post 2 (on the skipped page 1) still gets poked individually for fresh reactions.
+      .mockResolvedValueOnce(jsonResponse({ id: 2, reaction_users_count: 7 }));
 
     const result = await ingestJamTopic(44801, new Date("2026-08-03T00:00:00.000Z"));
 
@@ -409,9 +397,115 @@ describe("ingestJamTopic", () => {
       .map((call) => String(call[0]));
     expect(topicFetches).toEqual([
       "https://forum.makecode.com/t/44801.json",
+      "https://forum.makecode.com/t/44801.json?page=3",
       "https://forum.makecode.com/t/44801.json?page=2",
-      "https://forum.makecode.com/t/44801.json",
-      "https://forum.makecode.com/t/44801.json?page=2",
+    ]);
+    expect(topicFetches).not.toContain("https://forum.makecode.com/t/44801.json?page=1");
+
+    expect(mockFetch).toHaveBeenCalledWith("https://forum.makecode.com/posts/2.json", {
+      headers: { Accept: "application/json" },
+    });
+  });
+});
+
+describe("ingestCategoryTopics (never-seen-before topic)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-08-04T12:00:00.000Z");
+    mockFetch = vi.fn();
+    vi.stubGlobal("fetch", mockFetch);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("walks every page of a topic that has no known posts yet", async () => {
+    mockSupabase.from = vi.fn((table: string) => {
+      const calls: string[] = [];
+      const chain = {
+        select: () => { calls.push("select"); return chain; },
+        eq: () => { calls.push("eq"); return chain; },
+        limit: () => { calls.push("limit"); return chain; },
+        single: () => { calls.push("single"); return chain; },
+        insert: () => { calls.push("insert"); return chain; },
+        upsert: () => { calls.push("upsert"); return chain; },
+        update: () => { calls.push("update"); return chain; },
+        then: (resolve: (value: unknown) => void) => {
+          if (table === "game_forum_posts" && calls.includes("select") && calls.includes("eq") && !calls.includes("limit")) {
+            return resolve({ data: [], error: null });
+          }
+          if (calls.includes("upsert") || calls.includes("update")) return resolve({ error: null });
+          if (calls.includes("insert") && calls.includes("single")) return resolve({ data: { id: "game-1" }, error: null });
+          if (calls.includes("select") && calls.includes("limit")) return resolve({ data: [] });
+          return resolve({ data: null, error: null });
+        },
+      };
+      return chain;
+    });
+
+    const page1 = jsonResponse({
+      id: 400,
+      title: "Brand new thread",
+      category_id: 5,
+      posts_count: 4,
+      views: 5,
+      post_stream: {
+        posts: [
+          { id: 1, post_number: 1, cooked: '<p><a href="https://arcade.makecode.com/11111">game</a></p>', user_id: 1, username: "player", created_at: "2026-08-01T00:00:00.000Z", reaction_users_count: 0 },
+          { id: 2, post_number: 2, cooked: "<p>no link</p>", user_id: 2, username: "player2", created_at: "2026-08-01T01:00:00.000Z", reaction_users_count: 0 },
+        ],
+      },
+    });
+    const page2 = jsonResponse({
+      id: 400,
+      title: "Brand new thread",
+      category_id: 5,
+      posts_count: 4,
+      views: 5,
+      post_stream: {
+        posts: [
+          { id: 3, post_number: 3, cooked: "<p>no link either</p>", user_id: 2, username: "player2", created_at: "2026-08-01T02:00:00.000Z", reaction_users_count: 0 },
+          { id: 4, post_number: 4, cooked: '<p><a href="https://arcade.makecode.com/22222">game</a></p>', user_id: 1, username: "player", created_at: "2026-08-04T09:00:00.000Z", reaction_users_count: 0 },
+        ],
+      },
+    });
+
+    mockFetch
+      .mockResolvedValueOnce(
+        jsonResponse({
+          topic_list: {
+            topics: [
+              {
+                id: 400,
+                title: "Brand new thread",
+                posts_count: 4,
+                bumped_at: "2026-08-04T10:00:00.000Z",
+                category_id: 5,
+                views: 5,
+                created_at: "2026-08-01T00:00:00.000Z",
+              },
+            ],
+          },
+        })
+      )
+      .mockResolvedValueOnce(jsonResponse({ categories: [{ id: 5, name: "Games", slug: "games" }] }))
+      .mockResolvedValueOnce(page1)
+      .mockResolvedValueOnce(page2)
+      .mockResolvedValueOnce(jsonResponse({ kind: "script", id: "abc-22222", name: "New Game" }))
+      .mockResolvedValueOnce(jsonResponse({ kind: "script", id: "abc-11111", name: "Old Game" }));
+
+    const result = await ingestCategoryTopics(5, 10, new Date("2026-08-03T00:00:00.000Z"));
+
+    expect(result.games).toBe(2);
+    const topicFetches = mockFetch.mock.calls
+      .filter((call) => String(call[0]).includes("/t/400.json"))
+      .map((call) => String(call[0]));
+    expect(topicFetches).toEqual([
+      "https://forum.makecode.com/t/400.json",
+      "https://forum.makecode.com/t/400.json?page=2",
     ]);
   });
 });

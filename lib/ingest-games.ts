@@ -303,32 +303,40 @@ function buildLinkClicksMap(page: TopicPage | null): Map<string, number> {
   return map;
 }
 
-async function fetchRecentTopicPosts(
+/**
+ * Walks a topic's pages back-to-front, stopping as soon as it hits a page
+ * where every post is already known (already has a `game_forum_posts` row).
+ * This lets a mostly-ingested thread that gets bumped by one new reply only
+ * re-fetch the handful of trailing pages that could contain unseen posts,
+ * instead of re-crawling the whole thread.
+ */
+async function fetchThreadTailPosts(
   topicId: number,
-  cutoff: Date,
+  knownIds: Set<number>,
   firstPage?: TopicPage
-): Promise<{ posts: DiscoursePost[]; linkClicks: Map<string, number> }> {
+): Promise<{ posts: DiscoursePost[]; linkClicks: Map<string, number>; crawledIds: Set<number> }> {
   const first = firstPage || (await fetchJson<TopicPage>(`${FORUM_BASE}/t/${topicId}.json`));
-  if (!first) return { posts: [], linkClicks: new Map() };
+  if (!first) return { posts: [], linkClicks: new Map(), crawledIds: new Set() };
 
   const linkClicks = buildLinkClicksMap(first);
   const perPage = first.post_stream.posts.length || 20;
   const totalPages = Math.ceil(first.posts_count / perPage);
   const posts: DiscoursePost[] = [];
+  const crawledIds = new Set<number>();
 
   for (let page = totalPages; page >= 1; page--) {
     const pageData = page === 1 ? first : await fetchJson<TopicPage>(`${FORUM_BASE}/t/${topicId}.json?page=${page}`);
     if (!pageData) continue;
 
     const pagePosts = pageData.post_stream.posts;
-    const newer = pagePosts.filter((p) => p.created_at && new Date(p.created_at) >= cutoff);
-    posts.push(...newer);
+    posts.push(...pagePosts);
+    for (const post of pagePosts) crawledIds.add(post.id);
 
-    const oldestOnPage = pagePosts[0];
-    if (oldestOnPage?.created_at && new Date(oldestOnPage.created_at) < cutoff) break;
+    const pageFullyKnown = pagePosts.length > 0 && pagePosts.every((post) => knownIds.has(post.id));
+    if (pageFullyKnown) break;
   }
 
-  return { posts, linkClicks };
+  return { posts, linkClicks, crawledIds };
 }
 
 async function getKnownPostIds(topicId: number): Promise<Set<number>> {
@@ -364,7 +372,6 @@ async function batchWithDelay<T>(
 type IngestTopicOptions = {
   jamId?: string;
   skipFirstPost?: boolean;
-  cutoff?: Date;
   firstPage?: TopicPage;
   delayMs?: number;
 };
@@ -412,35 +419,32 @@ async function ingestTopic(
   categoryMap: CategoryMap,
   options: IngestTopicOptions = {}
 ): Promise<{ games: number; errors: string[] }> {
-  const effectiveCutoff = options.cutoff || new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
-  const delayMs = options.delayMs ?? 100;
-  const [knownIds, { posts: recentPosts }] = await Promise.all([
-    getKnownPostIds(topic.id),
-    fetchRecentTopicPosts(topic.id, effectiveCutoff, options.firstPage),
-  ]);
+  const knownIds = await getKnownPostIds(topic.id);
+  // A topic we've never looked at before is treated like a mini backfill
+  // (slower pacing); a topic we've already mostly mined only needs a small
+  // tail crawl, so the default (fast) pacing is fine.
+  const delayMs = knownIds.size === 0 ? 1000 : (options.delayMs ?? 100);
 
-  if (recentPosts.length === 0) {
-    const errors: string[] = [];
-    const historicalIds = [...knownIds];
+  const { posts, linkClicks, crawledIds } = await fetchThreadTailPosts(topic.id, knownIds, options.firstPage);
 
-    await batchWithDelay(historicalIds, CONCURRENCY_LIMIT, delayMs, async (forumPostId) => {
-      try {
-        await refreshSinglePostReactions(forumPostId);
-      } catch (e) {
-        errors.push(e instanceof Error ? e.message : String(e));
-      }
-    });
-
-    return { games: 0, errors };
-  }
-
-  // The topic has been recently active: fetch the whole thread so an older
-  // game post that never made it into a "recent" window still gets ingested.
-  const { posts: allPosts, linkClicks: allLinkClicks } = await fetchAllTopicPosts(topic.id);
-  return processTopicPosts(allPosts, topic, categoryMap, knownIds, allLinkClicks, 1000, {
+  const { games, errors } = await processTopicPosts(posts, topic, categoryMap, knownIds, linkClicks, delayMs, {
     jamId: options.jamId,
     skipFirstPost: options.skipFirstPost,
   });
+
+  // Anything known but outside the crawled tail wasn't re-fetched as part of
+  // a page, but its reactions/click count may still have changed - poke it
+  // individually by post id instead of re-crawling its page.
+  const uncrawledKnownIds = [...knownIds].filter((id) => !crawledIds.has(id));
+  await batchWithDelay(uncrawledKnownIds, CONCURRENCY_LIMIT, delayMs, async (forumPostId) => {
+    try {
+      await refreshSinglePostReactions(forumPostId);
+    } catch (e) {
+      errors.push(e instanceof Error ? e.message : String(e));
+    }
+  });
+
+  return { games, errors };
 }
 
 export async function ingestJamTopic(
@@ -454,10 +458,8 @@ export async function ingestJamTopic(
 
   const topic: DiscourseTopic = { ...first, id: topicId };
   const jam = await upsertJam(topic);
-  const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
-  const cutoff = lastIngestAt ? new Date(lastIngestAt.getTime() - 24 * 60 * 60 * 1000) : twoDaysAgo;
 
-  return ingestTopic(topic, categoryMap, { jamId: jam, skipFirstPost: true, cutoff, firstPage: first, delayMs });
+  return ingestTopic(topic, categoryMap, { jamId: jam, skipFirstPost: true, firstPage: first, delayMs });
 }
 
 export async function ingestCategoryTopics(
@@ -476,7 +478,6 @@ export async function ingestCategoryTopics(
   let games = 0;
 
   const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
-  const cutoff = lastIngestAt ? new Date(lastIngestAt.getTime() - 24 * 60 * 60 * 1000) : twoDaysAgo;
 
   const topics = category.topic_list.topics
     .filter((t) => {
@@ -487,7 +488,7 @@ export async function ingestCategoryTopics(
     .slice(0, limit);
 
   for (const topic of topics) {
-    const result = await ingestTopic(topic, categoryMap, { cutoff, delayMs });
+    const result = await ingestTopic(topic, categoryMap, { delayMs });
     games += result.games;
     errors.push(...result.errors);
   }
