@@ -7,7 +7,7 @@ This version has breaking changes — APIs, conventions, and file structure may 
 <!-- BEGIN:supabase-scope-guardrail -->
 ## Supabase scope guardrail
 
-All `supabase` CLI, SQL, and migration work in this repo must target only the `MakecodeGames` project (`wnrqogysflgnnoabljvw`). Do not link, query, or push to any other Supabase project or shared database.
+All `supabase` CLI, SQL, and migration work in this repo must target only the `MakecodeGames` project (its ref is set via the `SUPABASE_PROJECT_ID` env var / GitHub repository variable). Do not link, query, or push to any other Supabase project or shared database.
 <!-- END:supabase-scope-guardrail -->
 
 <!-- BEGIN:loading-state-convention -->
