@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
-import { refreshGameReactions, ingestPost, ingestCategoryTopics, ingestJamTopic, ingestOnce } from "./ingest-games";
+import { refreshGameReactions, ingestPost, ingestCategoryTopics, ingestJamTopic, ingestOnce, listActiveCategoryTopics } from "./ingest-games";
 
 const mockSupabase = vi.hoisted(() => ({ from: vi.fn(), rpc: vi.fn() }));
 
@@ -263,6 +263,15 @@ describe("ingestCategoryTopics", () => {
                 views: 50,
                 created_at: "2026-08-01T00:00:00.000Z",
               },
+              {
+                id: 201,
+                title: "Old thread",
+                posts_count: 1,
+                bumped_at: "2026-08-01T00:00:00.000Z",
+                category_id: 5,
+                views: 1,
+                created_at: "2026-08-01T00:00:00.000Z",
+              },
             ],
           },
         })
@@ -303,8 +312,8 @@ describe("ingestCategoryTopics", () => {
   });
 
   it("stops crawling after maxPages even if no fully-known page is hit", async () => {
-    // Topic 500 has 8 pages (1 post per page), no known posts.
-    // The tail walk should stop after 5 pages (8, 7, 6, 5, 4).
+    // Topic 500 has 12 pages (1 post per page), no known posts.
+    // The tail walk should stop after 10 pages (12, 11, ..., 3).
     mockSupabase.from = vi.fn((table: string) => {
       const calls: string[] = [];
       const chain = {
@@ -333,7 +342,7 @@ describe("ingestCategoryTopics", () => {
         id: 500,
         title: "Chatting area have fun",
         category_id: 5,
-        posts_count: 8,
+        posts_count: 12,
         views: 1000,
         post_stream: {
           posts: [
@@ -344,7 +353,7 @@ describe("ingestCategoryTopics", () => {
     }
 
     const pages: Record<number, ReturnType<typeof makePage>> = {};
-    for (let i = 1; i <= 8; i++) {
+    for (let i = 1; i <= 12; i++) {
       pages[i] = makePage(i, i, 10000 + i);
     }
 
@@ -356,10 +365,19 @@ describe("ingestCategoryTopics", () => {
               {
                 id: 500,
                 title: "Chatting area have fun",
-                posts_count: 8,
+                posts_count: 12,
                 bumped_at: "2026-08-04T10:00:00.000Z",
                 category_id: 5,
                 views: 1000,
+                created_at: "2026-08-01T00:00:00.000Z",
+              },
+              {
+                id: 501,
+                title: "Old chat",
+                posts_count: 1,
+                bumped_at: "2026-08-01T00:00:00.000Z",
+                category_id: 5,
+                views: 1,
                 created_at: "2026-08-01T00:00:00.000Z",
               },
             ],
@@ -368,34 +386,50 @@ describe("ingestCategoryTopics", () => {
       )
       .mockResolvedValueOnce(jsonResponse({ categories: [{ id: 5, name: "Games", slug: "games" }] }))
       .mockResolvedValueOnce(pages[1])
+      .mockResolvedValueOnce(pages[12])
+      .mockResolvedValueOnce(pages[11])
+      .mockResolvedValueOnce(pages[10])
+      .mockResolvedValueOnce(pages[9])
       .mockResolvedValueOnce(pages[8])
       .mockResolvedValueOnce(pages[7])
       .mockResolvedValueOnce(pages[6])
       .mockResolvedValueOnce(pages[5])
       .mockResolvedValueOnce(pages[4])
-      // Games from pages 8, 7, 6, 5, 4.
+      .mockResolvedValueOnce(pages[3])
+      // Games from pages 12, 11, 10, 9, 8, 7, 6, 5, 4, 3.
+      .mockResolvedValueOnce(jsonResponse({ kind: "script", id: "abc-12", name: "Game 12" }))
+      .mockResolvedValueOnce(jsonResponse({ kind: "script", id: "abc-11", name: "Game 11" }))
+      .mockResolvedValueOnce(jsonResponse({ kind: "script", id: "abc-10", name: "Game 10" }))
+      .mockResolvedValueOnce(jsonResponse({ kind: "script", id: "abc-9", name: "Game 9" }))
       .mockResolvedValueOnce(jsonResponse({ kind: "script", id: "abc-8", name: "Game 8" }))
       .mockResolvedValueOnce(jsonResponse({ kind: "script", id: "abc-7", name: "Game 7" }))
       .mockResolvedValueOnce(jsonResponse({ kind: "script", id: "abc-6", name: "Game 6" }))
       .mockResolvedValueOnce(jsonResponse({ kind: "script", id: "abc-5", name: "Game 5" }))
-      .mockResolvedValueOnce(jsonResponse({ kind: "script", id: "abc-4", name: "Game 4" }));
+      .mockResolvedValueOnce(jsonResponse({ kind: "script", id: "abc-4", name: "Game 4" }))
+      .mockResolvedValueOnce(jsonResponse({ kind: "script", id: "abc-3", name: "Game 3" }));
 
-    const result = await ingestCategoryTopics(5, 10, new Date("2026-08-03T00:00:00.000Z"));
+    const promise = ingestCategoryTopics(5, 10, new Date("2026-08-03T00:00:00.000Z"));
+    await vi.runAllTimersAsync();
+    const result = await promise;
 
-    expect(result.games).toBe(5);
+    expect(result.games).toBe(10);
 
     const topicFetches = mockFetch.mock.calls
       .filter((call) => String(call[0]).includes("/t/500.json"))
       .map((call) => String(call[0]));
     expect(topicFetches).toEqual([
       "https://forum.makecode.com/t/500.json",
+      "https://forum.makecode.com/t/500.json?page=12",
+      "https://forum.makecode.com/t/500.json?page=11",
+      "https://forum.makecode.com/t/500.json?page=10",
+      "https://forum.makecode.com/t/500.json?page=9",
       "https://forum.makecode.com/t/500.json?page=8",
       "https://forum.makecode.com/t/500.json?page=7",
       "https://forum.makecode.com/t/500.json?page=6",
       "https://forum.makecode.com/t/500.json?page=5",
       "https://forum.makecode.com/t/500.json?page=4",
+      "https://forum.makecode.com/t/500.json?page=3",
     ]);
-    expect(topicFetches).not.toContain("https://forum.makecode.com/t/500.json?page=3");
     expect(topicFetches).not.toContain("https://forum.makecode.com/t/500.json?page=2");
     expect(topicFetches).not.toContain("https://forum.makecode.com/t/500.json?page=1");
   });
@@ -591,6 +625,15 @@ describe("ingestCategoryTopics (never-seen-before topic)", () => {
                 views: 5,
                 created_at: "2026-08-01T00:00:00.000Z",
               },
+              {
+                id: 401,
+                title: "Old thread",
+                posts_count: 1,
+                bumped_at: "2026-08-01T00:00:00.000Z",
+                category_id: 5,
+                views: 1,
+                created_at: "2026-08-01T00:00:00.000Z",
+              },
             ],
           },
         })
@@ -759,5 +802,296 @@ describe("ingestOnce", () => {
 
     expect(mockSupabase.rpc).toHaveBeenCalledWith("snapshot_game_stats");
     expect(mockSupabase.rpc).toHaveBeenCalledWith("refresh_game_daily_stats");
+  });
+});
+
+describe("listActiveCategoryTopics", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-08-04T12:00:00.000Z");
+    mockFetch = vi.fn();
+    vi.stubGlobal("fetch", mockFetch);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("falls back to last_posted_at when bumped_at is missing and pages until the limit is reached", async () => {
+    mockFetch
+      .mockResolvedValueOnce(
+        jsonResponse({
+          topic_list: {
+            topics: [
+              {
+                id: 1,
+                title: "Bumped",
+                posts_count: 5,
+                bumped_at: "2026-08-04T10:00:00.000Z",
+                last_posted_at: "2026-08-04T10:00:00.000Z",
+                category_id: 5,
+                views: 10,
+                created_at: "2026-08-01T00:00:00.000Z",
+              },
+              {
+                id: 2,
+                title: "Not bumped",
+                posts_count: 3,
+                bumped_at: null,
+                last_posted_at: "2026-08-04T09:00:00.000Z",
+                category_id: 5,
+                views: 5,
+                created_at: "2026-08-01T00:00:00.000Z",
+              },
+            ],
+          },
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          topic_list: {
+            topics: [
+              {
+                id: 3,
+                title: "Page two active",
+                posts_count: 2,
+                bumped_at: "2026-08-04T08:00:00.000Z",
+                category_id: 5,
+                views: 2,
+                created_at: "2026-08-01T00:00:00.000Z",
+              },
+              {
+                id: 4,
+                title: "Page two old",
+                posts_count: 1,
+                bumped_at: "2026-08-01T00:00:00.000Z",
+                category_id: 5,
+                views: 1,
+                created_at: "2026-08-01T00:00:00.000Z",
+              },
+            ],
+          },
+        })
+      );
+
+    const topics = await listActiveCategoryTopics(5, 3, new Date("2026-08-03T00:00:00.000Z"));
+
+    expect(topics.map((t) => t.id)).toEqual([1, 2, 3]);
+    expect(mockFetch).toHaveBeenCalledWith("https://forum.makecode.com/c/5.json", { headers: { Accept: "application/json" } });
+    expect(mockFetch).toHaveBeenCalledWith("https://forum.makecode.com/c/5.json?page=2", { headers: { Accept: "application/json" } });
+  });
+
+  it("stops paging when the oldest topic on a page is outside the activity window", async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({
+        topic_list: {
+          topics: [
+            {
+              id: 1,
+              title: "Active",
+              posts_count: 5,
+              bumped_at: "2026-08-04T10:00:00.000Z",
+              category_id: 5,
+              views: 10,
+              created_at: "2026-08-01T00:00:00.000Z",
+            },
+            {
+              id: 2,
+              title: "Old",
+              posts_count: 1,
+              bumped_at: "2026-08-01T00:00:00.000Z",
+              category_id: 5,
+              views: 1,
+              created_at: "2026-08-01T00:00:00.000Z",
+            },
+          ],
+        },
+      })
+    );
+
+    const topics = await listActiveCategoryTopics(5, 10, new Date("2026-08-03T00:00:00.000Z"));
+
+    expect(topics.map((t) => t.id)).toEqual([1]);
+  });
+
+  it("returns all topics on the first run (no lastIngestAt)", async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({
+        topic_list: {
+          topics: [
+            {
+              id: 1,
+              title: "One",
+              posts_count: 1,
+              bumped_at: "2026-08-01T00:00:00.000Z",
+              category_id: 5,
+              views: 1,
+              created_at: "2026-08-01T00:00:00.000Z",
+            },
+            {
+              id: 2,
+              title: "Two",
+              posts_count: 1,
+              bumped_at: "2026-08-01T00:00:00.000Z",
+              category_id: 5,
+              views: 1,
+              created_at: "2026-08-01T00:00:00.000Z",
+            },
+          ],
+        },
+      })
+    );
+
+    const topics = await listActiveCategoryTopics(5, 10);
+
+    expect(topics.map((t) => t.id)).toEqual([1, 2]);
+  });
+});
+
+describe("ingestCategoryTopics link click handling", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-08-04T12:00:00.000Z");
+    mockFetch = vi.fn();
+    vi.stubGlobal("fetch", mockFetch);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("merges details.links from every crawled page and refreshes link_clicks for known and new posts", async () => {
+    const upsertCalls: { table: string; data: unknown }[] = [];
+    const updateCalls: { table: string; data: unknown }[] = [];
+    const insertCalls: { table: string; data: unknown }[] = [];
+
+    mockSupabase.from = vi.fn((table: string) => {
+      const calls: string[] = [];
+      const chain = {
+        select: () => { calls.push("select"); return chain; },
+        eq: () => { calls.push("eq"); return chain; },
+        limit: () => { calls.push("limit"); return chain; },
+        single: () => { calls.push("single"); return chain; },
+        insert: (data: unknown) => { calls.push("insert"); insertCalls.push({ table, data }); return chain; },
+        upsert: (data: unknown) => { calls.push("upsert"); upsertCalls.push({ table, data }); return chain; },
+        update: (data: unknown) => { calls.push("update"); updateCalls.push({ table, data }); return chain; },
+        then: (resolve: (value: unknown) => void) => {
+          if (table === "game_forum_posts" && calls.includes("select") && calls.includes("eq") && !calls.includes("limit")) {
+            return resolve({ data: [1, 2, 3, 4, 5].map((id) => ({ forum_post_id: id })), error: null });
+          }
+          if (calls.includes("update")) return resolve({ error: null });
+          if (calls.includes("upsert")) return resolve({ error: null });
+          if (calls.includes("insert") && calls.includes("single")) {
+            const last = insertCalls[insertCalls.length - 1];
+            const shareUrl = (last?.data as { share_url?: string } | undefined)?.share_url ?? "";
+            const id = shareUrl.split("/").pop() || "game-unknown";
+            return resolve({ data: { id }, error: null });
+          }
+          if (calls.includes("select") && calls.includes("limit")) return resolve({ data: [] });
+          return resolve({ data: null, error: null });
+        },
+      };
+      return chain;
+    });
+
+    function makeLink(urlId: string, clicks: number) {
+      return { url: `https://arcade.makecode.com/${urlId}`, clicks };
+    }
+
+    function makePost(id: number, postNumber: number, urlId?: string, reactionCount = id) {
+      const cooked = urlId
+        ? `<p><a href="https://arcade.makecode.com/${urlId}">game</a></p>`
+        : "<p>no link</p>";
+      return { id, post_number: postNumber, cooked, user_id: 1, username: "player", created_at: "2026-08-01T00:00:00.000Z", reaction_users_count: reactionCount };
+    }
+
+    function makePage(pageNum: number, posts: unknown[], links: unknown[]) {
+      return jsonResponse({
+        id: 300,
+        title: "Topic with link clicks",
+        category_id: 5,
+        posts_count: 8,
+        views: 100,
+        details: { links },
+        post_stream: { posts },
+      });
+    }
+
+    const page1 = makePage(1, [makePost(1, 1, "10001", 1), makePost(2, 2, undefined, 2)], [makeLink("10001", 1), makeLink("10002", 2)]);
+    const page2 = makePage(2, [makePost(3, 3, "10003", 3), makePost(4, 4, "10004", 4)], [makeLink("10003", 30), makeLink("10004", 40)]);
+    const page3 = makePage(3, [makePost(5, 5, "10005", 5), makePost(6, 6, "10006", 6)], [makeLink("10005", 50), makeLink("10006", 60)]);
+    const page4 = makePage(4, [makePost(7, 7, "10007", 7), makePost(8, 8, "10008", 8)], [makeLink("10007", 70), makeLink("10008", 80), makeLink("10001", 10)]);
+
+    mockFetch
+      .mockResolvedValueOnce(
+        jsonResponse({
+          topic_list: {
+            topics: [
+              {
+                id: 300,
+                title: "Topic with link clicks",
+                posts_count: 8,
+                bumped_at: "2026-08-04T10:00:00.000Z",
+                category_id: 5,
+                views: 100,
+                created_at: "2026-08-01T00:00:00.000Z",
+              },
+              {
+                id: 301,
+                title: "Old thread",
+                posts_count: 1,
+                bumped_at: "2026-08-01T00:00:00.000Z",
+                category_id: 5,
+                views: 1,
+                created_at: "2026-08-01T00:00:00.000Z",
+              },
+            ],
+          },
+        })
+      )
+      .mockResolvedValueOnce(jsonResponse({ categories: [{ id: 5, name: "Games", slug: "games" }] }))
+      .mockResolvedValueOnce(page1)
+      .mockResolvedValueOnce(page4)
+      .mockResolvedValueOnce(page3)
+      .mockResolvedValueOnce(page2)
+      .mockResolvedValueOnce(jsonResponse({ kind: "script", id: "10007", name: "Game 7" }))
+      .mockResolvedValueOnce(jsonResponse({ kind: "script", id: "10008", name: "Game 8" }))
+      .mockResolvedValueOnce(jsonResponse({ kind: "script", id: "10006", name: "Game 6" }))
+      .mockResolvedValueOnce(jsonResponse({ id: 1, cooked: '<p><a href="https://arcade.makecode.com/10001">game</a></p>', reaction_users_count: 11 }))
+      .mockResolvedValueOnce(jsonResponse({ id: 2, cooked: "<p>no link</p>", reaction_users_count: 12 }));
+
+    const promise = ingestCategoryTopics(5, 10, new Date("2026-08-03T00:00:00.000Z"));
+    await vi.runAllTimersAsync();
+    const result = await promise;
+
+    expect(result.games).toBe(3);
+
+    const topicFetches = mockFetch.mock.calls
+      .filter((call) => String(call[0]).includes("/t/300.json"))
+      .map((call) => String(call[0]));
+    expect(topicFetches).toEqual([
+      "https://forum.makecode.com/t/300.json",
+      "https://forum.makecode.com/t/300.json?page=4",
+      "https://forum.makecode.com/t/300.json?page=3",
+      "https://forum.makecode.com/t/300.json?page=2",
+    ]);
+
+    const forumUpserts = upsertCalls.filter((c) => c.table === "game_forum_posts").map((c) => c.data as { forum_post_id: number; link_clicks: number });
+    expect(forumUpserts).toMatchObject([
+      { forum_post_id: 7, link_clicks: 70 },
+      { forum_post_id: 8, link_clicks: 80 },
+      { forum_post_id: 6, link_clicks: 60 },
+    ]);
+
+    const forumUpdates = updateCalls.filter((c) => c.table === "game_forum_posts").map((c) => c.data as { reaction_count: number; link_clicks: number });
+    expect(forumUpdates).toContainEqual(expect.objectContaining({ link_clicks: 50, reaction_count: 5 }));
+    expect(forumUpdates).toContainEqual(expect.objectContaining({ link_clicks: 30, reaction_count: 3 }));
+    expect(forumUpdates).toContainEqual(expect.objectContaining({ link_clicks: 40, reaction_count: 4 }));
+    expect(forumUpdates).toContainEqual(expect.objectContaining({ link_clicks: 10, reaction_count: 11 }));
+    expect(forumUpdates).toContainEqual(expect.objectContaining({ link_clicks: 0, reaction_count: 12 }));
   });
 });
