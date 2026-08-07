@@ -2,12 +2,12 @@
 
 import { useState, useTransition } from "react";
 import Image from "next/image";
-import { User } from "@supabase/supabase-js";
 import { GameWithStats } from "@/app/games/actions";
 import { recordClick } from "@/app/games/actions";
 import { LikeControl } from "./LikeControl";
+import { PlayControl } from "./PlayControl";
 
-export function GameCard({ game, user }: { game: GameWithStats; user: User | null }) {
+export function GameCard({ game }: { game: GameWithStats }) {
   const [failed, setFailed] = useState(false);
   const [, startTransition] = useTransition();
 
@@ -38,18 +38,25 @@ export function GameCard({ game, user }: { game: GameWithStats; user: User | nul
           {game.title}
         </h3>
         <p className="font-sans text-sm text-makecode-brown">{game.author_username || "Anonymous"}</p>
-        <div className="mt-2 flex items-center justify-between">
-          <LikeControl game={game} user={user} />
-          <a
-            href={game.forum_url || `https://forum.makecode.com/t/${game.id}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label={`Visit the forum post for ${game.title}`}
-            title={`Visit the forum post for ${game.title}`}
-            className="font-sans text-sm font-bold text-makecode-blue hover:underline"
-          >
-            Forum ({game.replies})
-          </a>
+        <div className="mt-2 flex flex-col items-end gap-1">
+          <div className="flex items-center gap-2">
+            <LikeControl game={game} />
+            <PlayControl game={game} />
+          </div>
+          {game.forum_url ? (
+            <a
+              href={game.forum_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`Visit the forum post for ${game.title}`}
+              title={game.forum_topic_title || `Visit the forum post for ${game.title}`}
+              className="max-w-full truncate text-right font-sans text-sm font-bold text-makecode-blue hover:underline"
+            >
+              {game.forum_topic_title || "Forum"}
+            </a>
+          ) : (
+            <span className="font-sans text-sm font-bold text-makecode-brown">Forum</span>
+          )}
         </div>
       </div>
     </div>
