@@ -381,18 +381,31 @@ async function refreshKnownPostMetadata(
   if (error) throw error;
 }
 
-async function refreshSinglePostReactions(forumPostId: number) {
+async function refreshSinglePostReactions(forumPostId: number, linkClicks?: Map<string, number>) {
   "use step";
   const post = await fetchJson<DiscoursePost>(`${FORUM_BASE}/posts/${forumPostId}.json`);
   if (!post) return;
 
-  const { error } = await supabaseServer
-    .from("game_forum_posts")
-    .update({
-      reaction_count: post.reaction_users_count ?? 0,
-      reaction_refreshed_at: new Date().toISOString(),
-    })
-    .eq("forum_post_id", forumPostId);
+  const update: {
+    reaction_count: number;
+    reaction_refreshed_at: string;
+    link_clicks?: number;
+  } = {
+    reaction_count: post.reaction_users_count ?? 0,
+    reaction_refreshed_at: new Date().toISOString(),
+  };
+
+  if (linkClicks) {
+    const urls = extractShareUrls(post.cooked);
+    if (urls.length) {
+      const clicks = linkClicks.get(urls[0]);
+      if (typeof clicks === "number") update.link_clicks = clicks;
+    } else {
+      update.link_clicks = 0;
+    }
+  }
+
+  const { error } = await supabaseServer.from("game_forum_posts").update(update).eq("forum_post_id", forumPostId);
   if (error) throw error;
 }
 
@@ -405,8 +418,8 @@ async function fetchTopicPageStep(topicId: number, page?: number): Promise<Topic
   return fetchJson<TopicPage>(url);
 }
 
-function buildLinkClicksMap(page: TopicPage | null): Map<string, number> {
-  const map = new Map<string, number>();
+function buildLinkClicksMap(page: TopicPage | null, into?: Map<string, number>): Map<string, number> {
+  const map = into ?? new Map<string, number>();
   if (!page?.details?.links) return map;
   for (const link of page.details.links) {
     map.set(link.url, link.clicks);
@@ -420,12 +433,15 @@ function buildLinkClicksMap(page: TopicPage | null): Map<string, number> {
  * This lets a mostly-ingested thread that gets bumped by one new reply only
  * re-fetch the handful of trailing pages that could contain unseen posts,
  * instead of re-crawling the whole thread.
+ *
+ * Daily syncs cap the walk at 10 pages; backfills should use `fetchAllTopicPosts`
+ * when the entire thread needs to be re-crawled.
  */
 async function fetchThreadTailPosts(
   topicId: number,
   knownIds: Set<number>,
   firstPage?: TopicPage,
-  maxPages = 5
+  maxPages = 10
 ): Promise<{ posts: DiscoursePost[]; linkClicks: Map<string, number>; crawledIds: Set<number> }> {
   const first = firstPage || (await fetchTopicPageStep(topicId));
   if (!first) return { posts: [], linkClicks: new Map(), crawledIds: new Set() };
@@ -440,6 +456,8 @@ async function fetchThreadTailPosts(
   for (let page = totalPages; page >= 1; page--) {
     const pageData = page === 1 ? first : await fetchTopicPageStep(topicId, page);
     if (!pageData) continue;
+
+    buildLinkClicksMap(pageData, linkClicks);
 
     const pagePosts = pageData.post_stream.posts;
     posts.push(...pagePosts);
@@ -590,7 +608,7 @@ async function ingestTopic(
     delayMs,
     async (forumPostId) => {
       try {
-        await refreshSinglePostReactions(forumPostId);
+        await refreshSinglePostReactions(forumPostId, linkClicks);
       } catch (e) {
         errors.push(e instanceof Error ? e.message : String(e));
       }
@@ -634,29 +652,58 @@ export async function ingestJamTopic(
   });
 }
 
+function getTopicActivityAt(t: DiscourseTopic): Date | null {
+  const ts = t.bumped_at ?? t.last_posted_at ?? t.created_at;
+  if (!ts) return null;
+  return new Date(ts);
+}
+
+function isTopicActive(t: DiscourseTopic, since: Date): boolean {
+  const activityAt = getTopicActivityAt(t);
+  return activityAt !== null && activityAt >= since;
+}
+
 /**
  * Lists the topics from a category that are worth checking during a daily
  * ingest run (bumped within the last 2 days, or everything on the first
  * ever run). Shared by the synchronous `ingestCategoryTopics` path and the
  * per-topic-child-workflow fan-out in `workflows/ingest.ts`.
+ *
+ * Pages through the category listing until `limit` active topics are found
+ * or the oldest topic on a page is outside the activity window. If a topic
+ * has no `bumped_at`, `last_posted_at` is used as a fallback.
  */
 export async function listActiveCategoryTopics(
   categoryId: number,
   limit: number,
   lastIngestAt?: Date
 ): Promise<DiscourseTopic[]> {
-  const category = await fetchCategoryListingStep(categoryId);
-  if (!category) return [];
-
   const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+  const active: DiscourseTopic[] = [];
+  let page: number | undefined;
 
-  return category.topic_list.topics
-    .filter((t) => {
-      if (!lastIngestAt) return true;
-      const bumpedAt = t.bumped_at ? new Date(t.bumped_at) : null;
-      return bumpedAt && bumpedAt >= twoDaysAgo;
-    })
-    .slice(0, limit);
+  while (active.length < limit) {
+    const listing = await fetchCategoryListingStep(categoryId, page);
+    if (!listing || !listing.topic_list.topics.length) break;
+
+    const topics = listing.topic_list.topics;
+
+    if (!lastIngestAt) {
+      active.push(...topics);
+      if (topics.length < 30) break;
+    } else {
+      for (const t of topics) {
+        if (isTopicActive(t, twoDaysAgo)) active.push(t);
+      }
+
+      const oldest = topics[topics.length - 1];
+      if (!isTopicActive(oldest, twoDaysAgo)) break;
+    }
+
+    page = (page ?? 1) + 1;
+  }
+
+  return active.slice(0, limit);
 }
 
 /** Ingests a single category topic, fetching its own category map. Exported
@@ -702,6 +749,7 @@ async function fetchAllTopicPosts(topicId: number): Promise<{ topic: DiscourseTo
   for (let page = 2; page <= pages; page++) {
     const next = await fetchTopicPageStep(topicId, page);
     if (!next) break;
+    buildLinkClicksMap(next, linkClicks);
     posts.push(...next.post_stream.posts);
   }
 
