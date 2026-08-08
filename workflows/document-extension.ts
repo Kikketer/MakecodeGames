@@ -96,9 +96,9 @@ async function runChildWithCompletion(
 
 // --- Step wrappers (durable, non-deterministic work) ---
 
-async function checkChangeDetectionStep(owner: string, repo: string) {
+async function checkChangeDetectionStep(owner: string, repo: string, force?: boolean) {
   "use step";
-  return shouldRegenerateExtension(owner, repo);
+  return shouldRegenerateExtension(owner, repo, undefined, force);
 }
 
 async function recordSuccessStep(
@@ -111,9 +111,9 @@ async function recordSuccessStep(
   return recordSuccessfulGeneration(owner, repo, sha, prInfo);
 }
 
-async function recordFailureStep(owner: string, repo: string, sha: string, errorMessage: string) {
+async function recordFailureStep(owner: string, repo: string, errorMessage: string) {
   "use step";
-  return recordFailedGeneration(owner, repo, sha, errorMessage);
+  return recordFailedGeneration(owner, repo, errorMessage);
 }
 
 async function parseExtensionStep(owner: string, repo: string) {
@@ -197,13 +197,14 @@ export async function documentExtensionChildWorkflow(
   owner: string,
   repo: string,
   completionTokenArg: string,
+  force?: boolean,
 ) {
   "use workflow";
   console.log(`[ext-docs] documenting ${owner}/${repo}`);
   await runChildWithCompletion(
     owner,
     repo,
-    () => documentSingleExtension(owner, repo),
+    () => documentSingleExtension(owner, repo, force),
     completionTokenArg,
   );
 }
@@ -219,13 +220,14 @@ export async function documentExtensionChildWorkflow(
 export async function documentSingleExtension(
   owner: string,
   repo: string,
+  force?: boolean,
 ): Promise<
   | { pr?: PullRequestResult; tools: number; score: number }
   | { skipped: true; sha: string }
 > {
   // Step 0: Change detection — skip if the extension repo hasn't changed
   console.log(`[ext-docs] checking for changes on ${owner}/${repo}...`);
-  const { regenerate, currentSha, storedSha } = await checkChangeDetectionStep(owner, repo);
+  const { regenerate, currentSha, storedSha } = await checkChangeDetectionStep(owner, repo, force);
   if (!regenerate) {
     console.log(`[ext-docs] skipping ${owner}/${repo} — no changes since last generation (sha: ${currentSha})`);
     return { skipped: true, sha: currentSha };
@@ -265,7 +267,7 @@ export async function documentSingleExtension(
     console.error(`[ext-docs] failed to document ${owner}/${repo}: ${errorMessage}`);
     // Record the failure so we can track it
     try {
-      await recordFailureStep(owner, repo, currentSha, errorMessage);
+      await recordFailureStep(owner, repo, errorMessage);
     } catch (recordError) {
       console.error(`[ext-docs] failed to record failure status: ${recordError}`);
     }
@@ -275,20 +277,21 @@ export async function documentSingleExtension(
 
 // --- Spawn helpers (step-wrapped, matching ingest pattern) ---
 
-async function spawnExtensionChild(owner: string, repo: string, token: string): Promise<void> {
+async function spawnExtensionChild(owner: string, repo: string, token: string, force?: boolean): Promise<void> {
   "use step";
-  await start(documentExtensionChildWorkflow, [owner, repo, token]);
+  await start(documentExtensionChildWorkflow, [owner, repo, token, force]);
 }
 
 async function startAndWaitForChild(
   owner: string,
   repo: string,
+  force?: boolean,
 ): Promise<ChildResult> {
   const { workflowRunId } = getWorkflowMetadata();
   const token = completionToken(workflowRunId, `${owner}/${repo}`);
   const hook = childCompletionHook.create({ token });
 
-  await spawnExtensionChild(owner, repo, token);
+  await spawnExtensionChild(owner, repo, token, force);
 
   const completion = await hook;
   return completion;
@@ -306,14 +309,15 @@ async function startAndWaitForChild(
  */
 export async function documentExtensionsWorkflow(
   extensions?: { owner: string; repo: string }[],
+  force?: boolean,
 ) {
   "use workflow";
 
   const targets = extensions ?? INITIAL_EXTENSIONS;
-  console.log(`[ext-docs] fanning out to ${targets.length} child workflows`);
+  console.log(`[ext-docs] fanning out to ${targets.length} child workflows${force ? " (force=true)" : ""}`);
 
   const settled = await Promise.allSettled(
-    targets.map(({ owner, repo }) => startAndWaitForChild(owner, repo)),
+    targets.map(({ owner, repo }) => startAndWaitForChild(owner, repo, force)),
   );
 
   const completed: { owner: string; repo: string; pr?: PullRequestResult; tools: number; score: number }[] = [];
@@ -359,8 +363,8 @@ export async function documentExtensionsWorkflow(
  * Single-extension workflow (no fan-out). Use this when you want to
  * document just one extension without the batch orchestrator.
  */
-export async function documentSingleExtensionWorkflow(owner: string, repo: string) {
+export async function documentSingleExtensionWorkflow(owner: string, repo: string, force?: boolean) {
   "use workflow";
-  const result = await documentSingleExtension(owner, repo);
+  const result = await documentSingleExtension(owner, repo, force);
   return result;
 }

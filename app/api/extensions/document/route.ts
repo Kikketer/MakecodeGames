@@ -14,6 +14,7 @@ export async function GET(request: Request) {
 
   const url = new URL(request.url);
   const extension = url.searchParams.get("extension"); // e.g. "jwunderl/arcade-sprite-util"
+  const force = url.searchParams.get("force") === "true";
 
   try {
     if (extension) {
@@ -25,8 +26,8 @@ export async function GET(request: Request) {
       const repo = extension.slice(slashIdx + 1);
 
       // Fire-and-forget: the workflow can run longer than a single request timeout
-      const run = await start(documentSingleExtensionWorkflow, [owner, repo]);
-      return Response.json({ started: true, runId: run.runId, extension: `${owner}/${repo}` });
+      const run = await start(documentSingleExtensionWorkflow, [owner, repo, force]);
+      return Response.json({ started: true, runId: run.runId, extension: `${owner}/${repo}`, force });
     }
 
     // Batch mode: document all extensions (or a subset via ?extensions=a/b,c/d)
@@ -39,11 +40,12 @@ export async function GET(request: Request) {
       });
     }
 
-    const run = await start(documentExtensionsWorkflow, extensions ? [extensions] : []);
+    const run = await start(documentExtensionsWorkflow, extensions ? [extensions, force] : [undefined, force]);
     return Response.json({
       started: true,
       runId: run.runId,
       extensions: (extensions ?? INITIAL_EXTENSIONS).map((e) => `${e.owner}/${e.repo}`),
+      force,
     });
   } catch (err) {
     console.error("extension docs workflow failed to start", err);

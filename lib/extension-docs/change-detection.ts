@@ -66,12 +66,23 @@ export async function getExtensionDocStatus(owner: string, repo: string): Promis
  * Returns `true` if the extension should be re-documented (new commits
  * or never documented before), `false` if the SHA is unchanged.
  */
-export async function shouldRegenerateExtension(owner: string, repo: string, token?: string): Promise<{
+export async function shouldRegenerateExtension(
+  owner: string,
+  repo: string,
+  token?: string,
+  force?: boolean,
+): Promise<{
   regenerate: boolean;
   currentSha: string;
   storedSha: string | null;
 }> {
   const currentSha = await getExtensionRepoHeadSha(owner, repo, token);
+
+  if (force) {
+    const status = await getExtensionDocStatus(owner, repo);
+    return { regenerate: true, currentSha, storedSha: status?.lastCommitSha ?? null };
+  }
+
   const status = await getExtensionDocStatus(owner, repo);
 
   if (!status || !status.lastCommitSha) {
@@ -112,8 +123,15 @@ export async function recordSuccessfulGeneration(
   if (error) throw error;
 }
 
-/** Mark a generation as failed with an error message. */
-export async function recordFailedGeneration(owner: string, repo: string, sha: string, errorMessage: string): Promise<void> {
+/**
+ * Mark a generation as failed with an error message.
+ *
+ * Does NOT update `last_commit_sha` — only the last *successful* generation
+ * records the SHA. This prevents a failed run from blocking future retries:
+ * if we stored the SHA on failure, `shouldRegenerateExtension` would see the
+ * SHA unchanged on the next run and skip the extension forever.
+ */
+export async function recordFailedGeneration(owner: string, repo: string, errorMessage: string): Promise<void> {
   const now = new Date().toISOString();
   const { error } = await supabaseServer
     .from("extension_doc_status")
@@ -121,7 +139,6 @@ export async function recordFailedGeneration(owner: string, repo: string, sha: s
       {
         owner,
         repo,
-        last_commit_sha: sha,
         status: "failed",
         last_error: errorMessage,
         updated_at: now,

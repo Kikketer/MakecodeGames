@@ -332,7 +332,10 @@ Please regenerate the full documentation addressing these issues. Return the sam
       deprecated: block.deprecated || undefined,
       problem: aiTool.problem,
       whatItDoes: aiTool.whatItDoes,
-      parameters: aiTool.parameters,
+      parameters: aiTool.parameters.map((p) => ({
+        ...p,
+        default: p.default !== undefined ? String(p.default) : undefined,
+      })),
       returns: aiTool.returns,
       example: aiTool.example,
     };
@@ -416,7 +419,7 @@ function toolFromParsed(block: ParsedBlock, namespace: string): ExtensionTool {
     parameters: block.parameters.map((p) => ({
       name: p.name,
       type: p.type,
-      default: p.blockDefault ?? p.default,
+      default: p.blockDefault ?? p.default !== undefined ? String(p.blockDefault ?? p.default) : undefined,
       meaning: p.name,
     })),
     returns: block.returnType && block.returnType !== "void"
