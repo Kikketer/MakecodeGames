@@ -34,10 +34,10 @@ jobs:
         run: |
           if [ -n "$EXTENSION" ]; then
             echo "Documenting single extension: $EXTENSION"
-            curl -s -X GET "${VERCEL_URL}/api/extensions/document?extension=${EXTENSION}" \
+            curl -sS --fail-with-body -X GET "${VERCEL_URL}/api/extensions/document?extension=${EXTENSION}" \
               -H "Authorization: Bearer ${INGEST_SECRET}"
           else
             echo "Documenting full batch of extensions"
-            curl -s -X GET "${VERCEL_URL}/api/extensions/document" \
+            curl -sS --fail-with-body -X GET "${VERCEL_URL}/api/extensions/document" \
               -H "Authorization: Bearer ${INGEST_SECRET}"
           fi
