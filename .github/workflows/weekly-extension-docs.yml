@@ -1,0 +1,24 @@
+name: Weekly extension docs
+
+on:
+  schedule:
+    # Every Monday at 09:00 UTC
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+jobs:
+  document-extensions:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Start extension documentation workflow
+        # This starts the Vercel Workflow and gets an immediate ack.
+        # The workflow fans out one child per extension, each creating a
+        # branch + PR with auto-generated documentation. Watch progress in
+        # the Vercel dashboard (Observability > Workflows).
+        #
+        # To document a single extension on demand:
+        #   curl -X GET "${{ vars.INGEST_URL }}/api/extensions/document?extension=owner/repo" \
+        #     -H "Authorization: Bearer ${{ secrets.INGEST_SECRET }}"
+        run: |
+          curl -s -X GET "${{ vars.INGEST_URL }}/api/extensions/document" \
+            -H "Authorization: Bearer ${{ secrets.INGEST_SECRET }}"
