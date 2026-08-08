@@ -156,20 +156,16 @@ export async function readFileFromRepo(
 
 /** Get the latest commit SHA for an extension repo (for change detection). */
 export async function getExtensionRepoHeadSha(owner: string, repo: string, token?: string): Promise<string> {
-  const branchInfo = await ghJson<{ object: { sha: string } }>(
-    `/repos/${owner}/${repo}/git/refs/heads`,
+  // Get the repo's default branch, then resolve that branch's ref.
+  // We can't use /git/refs/heads (no branch) because it returns an array
+  // of refs, not a single ref object.
+  const repoInfo = await ghJson<{ default_branch: string }>(`/repos/${owner}/${repo}`, {}, token);
+  const ref = await ghJson<{ object: { sha: string } }>(
+    `/repos/${owner}/${repo}/git/refs/heads/${repoInfo.default_branch}`,
     {},
     token,
-  ).catch(async () => {
-    // Some repos only have master, not main — try the default branch via the repo info
-    const repoInfo = await ghJson<{ default_branch: string }>(`/repos/${owner}/${repo}`, {}, token);
-    return ghJson<{ object: { sha: string } }>(
-      `/repos/${owner}/${repo}/git/refs/heads/${repoInfo.default_branch}`,
-      {},
-      token,
-    );
-  });
-  return branchInfo.object.sha;
+  );
+  return ref.object.sha;
 }
 
 /**

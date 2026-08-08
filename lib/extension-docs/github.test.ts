@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   getDefaultBranchSha,
+  getExtensionRepoHeadSha,
   getBranchSha,
   ensureBranch,
   commitFilesToBranch,
@@ -68,6 +69,33 @@ describe("getDefaultBranchSha", () => {
     expect(result).toEqual({ sha: "abc123", branch: "main" });
     expect(calls[0].url).toContain("/repos/testowner/testrepo");
     expect(calls[1].url).toContain("/repos/testowner/testrepo/git/refs/heads/main");
+  });
+});
+
+describe("getExtensionRepoHeadSha", () => {
+  it("fetches the repo default branch then resolves that ref", async () => {
+    const calls = mockFetchSequence([
+      { status: 200, body: { default_branch: "main" } },
+      { status: 200, body: { object: { sha: "headsha" } } },
+    ]);
+
+    const sha = await getExtensionRepoHeadSha("someowner", "somerepo");
+
+    expect(sha).toBe("headsha");
+    expect(calls[0].url).toContain("/repos/someowner/somerepo");
+    expect(calls[1].url).toContain("/repos/someowner/somerepo/git/refs/heads/main");
+  });
+
+  it("works when the default branch is master", async () => {
+    const calls = mockFetchSequence([
+      { status: 200, body: { default_branch: "master" } },
+      { status: 200, body: { object: { sha: "mastersha" } } },
+    ]);
+
+    const sha = await getExtensionRepoHeadSha("someowner", "somerepo");
+
+    expect(sha).toBe("mastersha");
+    expect(calls[1].url).toContain("/git/refs/heads/master");
   });
 });
 
