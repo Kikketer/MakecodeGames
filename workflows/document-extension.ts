@@ -15,6 +15,11 @@ import {
   type GitHubFile,
   type PullRequestResult,
 } from "@/lib/extension-docs/github";
+import {
+  shouldRegenerateExtension,
+  recordSuccessfulGeneration,
+  recordFailedGeneration,
+} from "@/lib/extension-docs/change-detection";
 
 /**
  * Extension documentation workflow.
@@ -47,6 +52,7 @@ export const INITIAL_EXTENSIONS: { owner: string; repo: string }[] = [
 
 type ChildResult =
   | { status: "completed"; value: { owner: string; repo: string; pr?: PullRequestResult; tools: number; score: number } }
+  | { status: "skipped"; owner: string; repo: string; sha: string }
   | { status: "failed"; error: string; owner: string; repo: string };
 
 const childCompletionHook = defineHook<ChildResult>();
@@ -63,13 +69,20 @@ async function resumeParentCompletionStep(token: string, result: ChildResult): P
 async function runChildWithCompletion(
   owner: string,
   repo: string,
-  runChild: () => Promise<{ pr?: PullRequestResult; tools: number; score: number }>,
+  runChild: () => Promise<
+    | { pr?: PullRequestResult; tools: number; score: number }
+    | { skipped: true; sha: string }
+  >,
   token: string,
 ): Promise<void> {
   let result: ChildResult;
   try {
     const value = await runChild();
-    result = { status: "completed", value: { owner, repo, ...value } };
+    if ("skipped" in value) {
+      result = { status: "skipped", owner, repo, sha: value.sha };
+    } else {
+      result = { status: "completed", value: { owner, repo, ...value } };
+    }
   } catch (error) {
     result = {
       status: "failed",
@@ -82,6 +95,26 @@ async function runChildWithCompletion(
 }
 
 // --- Step wrappers (durable, non-deterministic work) ---
+
+async function checkChangeDetectionStep(owner: string, repo: string) {
+  "use step";
+  return shouldRegenerateExtension(owner, repo);
+}
+
+async function recordSuccessStep(
+  owner: string,
+  repo: string,
+  sha: string,
+  prInfo: { number: number; url: string },
+) {
+  "use step";
+  return recordSuccessfulGeneration(owner, repo, sha, prInfo);
+}
+
+async function recordFailureStep(owner: string, repo: string, sha: string, errorMessage: string) {
+  "use step";
+  return recordFailedGeneration(owner, repo, sha, errorMessage);
+}
 
 async function parseExtensionStep(owner: string, repo: string) {
   "use step";
@@ -152,6 +185,7 @@ Review the generated documentation before merging.`;
 
   return createDocumentationPullRequest(extensionOwner, extensionRepo, files, {
     prBody,
+    forceFresh: true,
   });
 }
 
@@ -173,34 +207,68 @@ export async function documentExtensionChildWorkflow(
 }
 
 /**
- * The full pipeline for a single extension: parse → generate → build files → create PR.
+ * The full pipeline for a single extension: check for changes → parse → generate → build files → create PR.
  * Exported as a standalone function so it can be called directly (e.g. by the CLI
  * script) or from within the child workflow.
+ *
+ * If the extension repo's HEAD SHA hasn't changed since the last successful
+ * generation, the pipeline is skipped entirely (returns `{ skipped: true }`).
  */
 export async function documentSingleExtension(
   owner: string,
   repo: string,
-): Promise<{ pr?: PullRequestResult; tools: number; score: number }> {
-  // Step 1: Parse the extension source
-  console.log(`[ext-docs] parsing ${owner}/${repo}...`);
-  const parsed = await parseExtensionStep(owner, repo);
-  console.log(`[ext-docs] found ${parsed.blocks.length} blocks, ${parsed.enums.length} enums`);
+): Promise<
+  | { pr?: PullRequestResult; tools: number; score: number }
+  | { skipped: true; sha: string }
+> {
+  // Step 0: Change detection — skip if the extension repo hasn't changed
+  console.log(`[ext-docs] checking for changes on ${owner}/${repo}...`);
+  const { regenerate, currentSha, storedSha } = await checkChangeDetectionStep(owner, repo);
+  if (!regenerate) {
+    console.log(`[ext-docs] skipping ${owner}/${repo} — no changes since last generation (sha: ${currentSha})`);
+    return { skipped: true, sha: currentSha };
+  }
+  if (storedSha) {
+    console.log(`[ext-docs] ${owner}/${repo} changed (${storedSha.slice(0, 7)} → ${currentSha.slice(0, 7)}), regenerating`);
+  } else {
+    console.log(`[ext-docs] ${owner}/${repo} not yet documented, generating`);
+  }
 
-  // Step 2: Generate documentation with Gemini reviewer loop
-  console.log(`[ext-docs] generating documentation...`);
-  const { doc, iterations, finalScore } = await generateDocumentationStep(parsed);
-  console.log(`[ext-docs] generated ${doc.tools.length} tools, score ${finalScore}/10`);
+  try {
+    // Step 1: Parse the extension source
+    console.log(`[ext-docs] parsing ${owner}/${repo}...`);
+    const parsed = await parseExtensionStep(owner, repo);
+    console.log(`[ext-docs] found ${parsed.blocks.length} blocks, ${parsed.enums.length} enums`);
 
-  // Step 3: Build the files to commit
-  console.log(`[ext-docs] building commit files...`);
-  const files = await buildCommitFilesStep(doc);
+    // Step 2: Generate documentation with Gemini reviewer loop
+    console.log(`[ext-docs] generating documentation...`);
+    const { doc, iterations, finalScore } = await generateDocumentationStep(parsed);
+    console.log(`[ext-docs] generated ${doc.tools.length} tools, score ${finalScore}/10`);
 
-  // Step 4: Create branch, commit, and PR
-  console.log(`[ext-docs] creating pull request...`);
-  const pr = await createPullRequestStep(owner, repo, files, finalScore, iterations);
-  console.log(`[ext-docs] PR #${pr.number}: ${pr.url}`);
+    // Step 3: Build the files to commit
+    console.log(`[ext-docs] building commit files...`);
+    const files = await buildCommitFilesStep(doc);
 
-  return { pr, tools: doc.tools.length, score: finalScore };
+    // Step 4: Create branch, commit, and PR (forceFresh closes any stale PR + deletes old branch)
+    console.log(`[ext-docs] creating pull request...`);
+    const pr = await createPullRequestStep(owner, repo, files, finalScore, iterations);
+    console.log(`[ext-docs] PR #${pr.number}: ${pr.url}`);
+
+    // Step 5: Record successful generation in Supabase
+    await recordSuccessStep(owner, repo, currentSha, { number: pr.number, url: pr.url });
+
+    return { pr, tools: doc.tools.length, score: finalScore };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error(`[ext-docs] failed to document ${owner}/${repo}: ${errorMessage}`);
+    // Record the failure so we can track it
+    try {
+      await recordFailureStep(owner, repo, currentSha, errorMessage);
+    } catch (recordError) {
+      console.error(`[ext-docs] failed to record failure status: ${recordError}`);
+    }
+    throw error;
+  }
 }
 
 // --- Spawn helpers (step-wrapped, matching ingest pattern) ---
@@ -247,12 +315,15 @@ export async function documentExtensionsWorkflow(
   );
 
   const completed: { owner: string; repo: string; pr?: PullRequestResult; tools: number; score: number }[] = [];
+  const skipped: { owner: string; repo: string; sha: string }[] = [];
   const failed: { owner: string; repo: string; error: string }[] = [];
 
   for (const outcome of settled) {
     if (outcome.status === "fulfilled") {
       if (outcome.value.status === "completed") {
         completed.push(outcome.value.value);
+      } else if (outcome.value.status === "skipped") {
+        skipped.push({ owner: outcome.value.owner, repo: outcome.value.repo, sha: outcome.value.sha });
       } else {
         failed.push({ owner: outcome.value.owner, repo: outcome.value.repo, error: outcome.value.error });
       }
@@ -262,7 +333,7 @@ export async function documentExtensionsWorkflow(
     }
   }
 
-  console.log(`[ext-docs] done: ${completed.length} succeeded, ${failed.length} failed`);
+  console.log(`[ext-docs] done: ${completed.length} succeeded, ${skipped.length} skipped, ${failed.length} failed`);
 
   return {
     completed: completed.map((c) => ({
@@ -270,6 +341,10 @@ export async function documentExtensionsWorkflow(
       pr: c.pr?.url,
       tools: c.tools,
       score: c.score,
+    })),
+    skipped: skipped.map((s) => ({
+      extension: `${s.owner}/${s.repo}`,
+      sha: s.sha,
     })),
     failed: failed.map((f) => ({
       extension: `${f.owner}/${f.repo}`,

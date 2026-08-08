@@ -5,6 +5,10 @@ import {
   ensureBranch,
   commitFilesToBranch,
   createPullRequest,
+  closePullRequest,
+  deleteBranch,
+  findOpenPrsForBranch,
+  cleanupExistingBranchAndPr,
   createDocumentationPullRequest,
   readFileFromRepo,
   type GitHubFile,
@@ -208,6 +212,122 @@ describe("createPullRequest", () => {
   });
 });
 
+describe("closePullRequest", () => {
+  it("sends a PATCH request to close the PR", async () => {
+    const calls = mockFetchSequence([
+      { status: 200, body: { number: 42, state: "closed" } },
+    ]);
+
+    await closePullRequest(42, TEST_REPO);
+
+    expect(calls[0].options.method).toBe("PATCH");
+    expect(calls[0].url).toContain("/pulls/42");
+    const body = JSON.parse(calls[0].options.body as string);
+    expect(body.state).toBe("closed");
+  });
+});
+
+describe("deleteBranch", () => {
+  it("sends a DELETE request for the branch ref", async () => {
+    const calls = mockFetchSequence([
+      { status: 204, body: "" },
+    ]);
+
+    await deleteBranch("docs/owner-repo", TEST_REPO);
+
+    expect(calls[0].options.method).toBe("DELETE");
+    expect(calls[0].url).toContain("/git/refs/heads/docs/owner-repo");
+  });
+});
+
+describe("findOpenPrsForBranch", () => {
+  it("returns open PRs for the branch", async () => {
+    mockFetchSequence([
+      { status: 200, body: [{ number: 7, html_url: "https://github.com/test/pr/7", state: "open" }] },
+    ]);
+
+    const prs = await findOpenPrsForBranch("docs/owner-repo", TEST_REPO);
+
+    expect(prs).toHaveLength(1);
+    expect(prs[0].number).toBe(7);
+  });
+
+  it("returns empty array when no PRs exist", async () => {
+    mockFetchSequence([{ status: 200, body: [] }]);
+
+    const prs = await findOpenPrsForBranch("docs/nonexistent", TEST_REPO);
+    expect(prs).toHaveLength(0);
+  });
+});
+
+describe("cleanupExistingBranchAndPr", () => {
+  it("closes open PRs and deletes the branch", async () => {
+    const calls = mockFetchSequence([
+      // findOpenPrsForBranch — found one
+      { status: 200, body: [{ number: 99, html_url: "https://github.com/test/pr/99", state: "open" }] },
+      // closePullRequest
+      { status: 200, body: { number: 99, state: "closed" } },
+      // getBranchSha — branch exists
+      { status: 200, body: { object: { sha: "branchsha" } } },
+      // deleteBranch
+      { status: 204, body: "" },
+    ]);
+
+    const result = await cleanupExistingBranchAndPr("docs/owner-repo", TEST_REPO);
+
+    expect(result.closedPrs).toEqual([99]);
+    expect(result.deletedBranch).toBe(true);
+
+    // Verify the close call
+    const closeCall = calls.find((c) => c.url.includes("/pulls/99") && c.options.method === "PATCH");
+    expect(closeCall).toBeDefined();
+    // Verify the delete call
+    const deleteCall = calls.find((c) => c.url.includes("/git/refs/heads/docs/owner-repo") && c.options.method === "DELETE");
+    expect(deleteCall).toBeDefined();
+  });
+
+  it("returns empty results when no PR or branch exists", async () => {
+    mockFetchSequence([
+      // findOpenPrsForBranch — none
+      { status: 200, body: [] },
+      // getBranchSha — 404
+      { status: 404, body: { message: "Not Found" } },
+    ]);
+
+    const result = await cleanupExistingBranchAndPr("docs/nonexistent", TEST_REPO);
+
+    expect(result.closedPrs).toEqual([]);
+    expect(result.deletedBranch).toBe(false);
+  });
+
+  it("closes multiple open PRs for the same branch", async () => {
+    const calls = mockFetchSequence([
+      // findOpenPrsForBranch — found two
+      {
+        status: 200,
+        body: [
+          { number: 10, html_url: "https://github.com/test/pr/10", state: "open" },
+          { number: 11, html_url: "https://github.com/test/pr/11", state: "open" },
+        ],
+      },
+      // closePullRequest #10
+      { status: 200, body: { number: 10, state: "closed" } },
+      // closePullRequest #11
+      { status: 200, body: { number: 11, state: "closed" } },
+      // getBranchSha — branch exists
+      { status: 200, body: { object: { sha: "branchsha" } } },
+      // deleteBranch
+      { status: 204, body: "" },
+    ]);
+
+    const result = await cleanupExistingBranchAndPr("docs/owner-repo", TEST_REPO);
+
+    expect(result.closedPrs).toEqual([10, 11]);
+    expect(result.deletedBranch).toBe(true);
+    expect(calls).toHaveLength(5);
+  });
+});
+
 describe("createDocumentationPullRequest", () => {
   it("creates branch, commits files, and opens a PR", async () => {
     const files: GitHubFile[] = [
@@ -284,5 +404,66 @@ describe("createDocumentationPullRequest", () => {
 
     expect(result.number).toBe(99);
     expect(result.url).toBe("https://github.com/test/pr/99");
+  });
+
+  it("with forceFresh: closes existing PR, deletes branch, then creates a fresh branch and PR", async () => {
+    const files: GitHubFile[] = [
+      { path: "content/extensions/owner/repo.ts", content: "export const x = 1;" },
+    ];
+
+    const calls = mockFetchSequence([
+      // getDefaultBranchSha: repo info
+      { status: 200, body: { default_branch: "main" } },
+      // getDefaultBranchSha: ref
+      { status: 200, body: { object: { sha: "mainsha" } } },
+      // cleanupExistingBranchAndPr: findOpenPrsForBranch — found one
+      { status: 200, body: [{ number: 55, html_url: "https://github.com/test/pr/55", state: "open" }] },
+      // cleanupExistingBranchAndPr: closePullRequest
+      { status: 200, body: { number: 55, state: "closed" } },
+      // cleanupExistingBranchAndPr: getBranchSha — branch exists
+      { status: 200, body: { object: { sha: "oldbranchsha" } } },
+      // cleanupExistingBranchAndPr: deleteBranch
+      { status: 204, body: "" },
+      // ensureBranch: getBranchSha (404 → create fresh)
+      { status: 404, body: { message: "Not Found" } },
+      // ensureBranch: create branch
+      { status: 201, body: { ref: "refs/heads/docs/owner-repo" } },
+      // commitFilesToBranch: getBranchSha
+      { status: 200, body: { object: { sha: "mainsha" } } },
+      // commitFilesToBranch: get commit info
+      { status: 200, body: { tree: { sha: "parenttree" } } },
+      // commitFilesToBranch: create blob
+      { status: 201, body: { sha: "blob1" } },
+      // commitFilesToBranch: create tree
+      { status: 201, body: { sha: "newtree" } },
+      // commitFilesToBranch: create commit
+      { status: 201, body: { sha: "newcommit" } },
+      // commitFilesToBranch: update ref
+      { status: 200, body: { ref: "refs/heads/docs/owner-repo" } },
+      // check for existing PRs — none (old one was closed)
+      { status: 200, body: [] },
+      // create new PR
+      { status: 201, body: { number: 77, html_url: "https://github.com/test/pr/77" } },
+    ]);
+
+    const result = await createDocumentationPullRequest("owner", "repo", files, {
+      repo: TEST_REPO,
+      forceFresh: true,
+    });
+
+    expect(result.number).toBe(77);
+    expect(result.url).toBe("https://github.com/test/pr/77");
+
+    // Verify the old PR was closed
+    const closeCall = calls.find((c) => c.url.includes("/pulls/55") && c.options.method === "PATCH");
+    expect(closeCall).toBeDefined();
+    // Verify the branch was deleted
+    const deleteCall = calls.find(
+      (c) => c.url.includes("/git/refs/heads/docs/owner-repo") && c.options.method === "DELETE",
+    );
+    expect(deleteCall).toBeDefined();
+    // Verify a new PR was created
+    const createPrCall = calls.find((c) => c.url.includes("/pulls") && c.options.method === "POST");
+    expect(createPrCall).toBeDefined();
   });
 });

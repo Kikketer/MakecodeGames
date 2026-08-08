@@ -254,6 +254,80 @@ export async function createPullRequest(
   return { number: pr.number, url: pr.html_url, branch: head, commitSha: "" };
 }
 
+/** Close a pull request by number. */
+export async function closePullRequest(
+  prNumber: number,
+  repo: RepoRef = DEFAULT_REPO,
+  token?: string,
+): Promise<void> {
+  await ghJson(
+    `/repos/${repo.owner}/${repo.name}/pulls/${prNumber}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ state: "closed" }),
+    },
+    token,
+  );
+}
+
+/** Delete a branch by name. */
+export async function deleteBranch(
+  branch: string,
+  repo: RepoRef = DEFAULT_REPO,
+  token?: string,
+): Promise<void> {
+  await ghJson(
+    `/repos/${repo.owner}/${repo.name}/git/refs/heads/${branch}`,
+    {
+      method: "DELETE",
+    },
+    token,
+  );
+}
+
+/** Find any open PRs for a given head branch. */
+export async function findOpenPrsForBranch(
+  branch: string,
+  repo: RepoRef = DEFAULT_REPO,
+  token?: string,
+): Promise<{ number: number; html_url: string; state: string }[]> {
+  return ghJson(
+    `/repos/${repo.owner}/${repo.name}/pulls?head=${repo.owner}:${branch}&state=open`,
+    {},
+    token,
+  );
+}
+
+/**
+ * Close any open PRs for the branch and delete the branch so the next
+ * generation starts from a clean base. This is used when regenerating
+ * documentation for an extension that already has an open (unmerged) PR.
+ */
+export async function cleanupExistingBranchAndPr(
+  branch: string,
+  repo: RepoRef = DEFAULT_REPO,
+  token?: string,
+): Promise<{ closedPrs: number[]; deletedBranch: boolean }> {
+  const closedPrs: number[] = [];
+
+  // Close any open PRs for this branch
+  const openPrs = await findOpenPrsForBranch(branch, repo, token);
+  for (const pr of openPrs) {
+    await closePullRequest(pr.number, repo, token);
+    closedPrs.push(pr.number);
+  }
+
+  // Delete the branch if it exists
+  let deletedBranch = false;
+  const existing = await getBranchSha(branch, repo, token);
+  if (existing) {
+    await deleteBranch(branch, repo, token);
+    deletedBranch = true;
+  }
+
+  return { closedPrs, deletedBranch };
+}
+
 /**
  * Full PR creation flow: ensure the branch exists, commit files, create a PR.
  * If the PR already exists for this branch, returns its info.
@@ -262,7 +336,14 @@ export async function createDocumentationPullRequest(
   extensionOwner: string,
   extensionRepo: string,
   files: GitHubFile[],
-  options: { commitMessage?: string; prBody?: string; repo?: RepoRef; token?: string } = {},
+  options: {
+    commitMessage?: string;
+    prBody?: string;
+    repo?: RepoRef;
+    token?: string;
+    /** When true, close any existing PR and delete the branch before creating a fresh one. */
+    forceFresh?: boolean;
+  } = {},
 ): Promise<PullRequestResult> {
   const repo = options.repo ?? DEFAULT_REPO;
   const token = options.token;
@@ -270,6 +351,12 @@ export async function createDocumentationPullRequest(
 
   // Get the default branch SHA to branch from
   const { sha: defaultSha, branch: defaultBranch } = await getDefaultBranchSha(repo, token);
+
+  if (options.forceFresh) {
+    // Close any open PRs for this branch and delete the branch so we
+    // start from a clean base (fresh branch off the latest default branch).
+    await cleanupExistingBranchAndPr(branchName, repo, token);
+  }
 
   // Create or reuse the branch
   await ensureBranch(branchName, defaultSha, repo, token);
@@ -280,11 +367,7 @@ export async function createDocumentationPullRequest(
   const commitSha = await commitFilesToBranch(branchName, files, commitMessage, repo, token);
 
   // Check if a PR already exists for this branch
-  const existingPrs = await ghJson<{ number: number; html_url: string; state: string }[]>(
-    `/repos/${repo.owner}/${repo.name}/pulls?head=${repo.owner}:${branchName}&state=open`,
-    {},
-    token,
-  );
+  const existingPrs = await findOpenPrsForBranch(branchName, repo, token);
   if (existingPrs.length > 0) {
     return {
       number: existingPrs[0].number,
