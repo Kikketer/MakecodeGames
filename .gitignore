@@ -45,3 +45,6 @@ next-env.d.ts
 backfill.log*
 .backfill-checkpoint.json
 /.swc
+
+# AI-generated extension docs (temporary comparison output)
+/content/extensions-generated/

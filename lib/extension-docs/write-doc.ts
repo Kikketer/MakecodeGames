@@ -120,6 +120,33 @@ export async function writeExtensionDocFile(
 }
 
 /**
+ * Write an extension doc as JSON to the generated-docs directory.
+ * Path: content/extensions-generated/[owner]/[repo].json
+ *
+ * This is used by the /extensions-beta route for visual comparison
+ * of AI-generated docs against the hand-written ones. The JSON format
+ * lets the route read the file at request time without recompiling.
+ */
+export async function writeExtensionDocJson(
+  doc: ExtensionDoc,
+  options: { basePath?: string; dryRun?: boolean } = {},
+): Promise<string> {
+  const basePath = options.basePath ?? process.cwd();
+  const filePath = join(basePath, "content", "extensions-generated", doc.owner, `${doc.repo}.json`);
+  const source = JSON.stringify(doc, null, 2);
+
+  if (options.dryRun) {
+    console.log(`[dry-run] Would write JSON to ${filePath} (${source.length} bytes)`);
+    return filePath;
+  }
+
+  await mkdir(dirname(filePath), { recursive: true });
+  await writeFile(filePath, source, "utf-8");
+  console.log(`Wrote JSON ${filePath} (${source.length} bytes)`);
+  return filePath;
+}
+
+/**
  * Update the extensions index file to import and register a new extension.
  * This is idempotent — if the extension is already registered, it's a no-op.
  */
