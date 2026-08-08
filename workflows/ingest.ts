@@ -5,6 +5,7 @@ import {
   ingestJamTopic,
   ingestSingleCategoryTopic,
   listActiveCategoryTopics,
+  listActiveJamTopics,
   readLastIngestAtStep,
   refreshGameDailyStatsStep,
   snapshotGameStatsStep,
@@ -79,9 +80,9 @@ export async function ingestCategoryTopicChildWorkflow(
   await runChildWithCompletion(() => ingestSingleCategoryTopic(topic, undefined, sleep), completionTokenArg);
 }
 
-async function spawnJamChild(lastIngestAtIso: string | undefined, token: string): Promise<void> {
+async function spawnJamChild(topicId: number, lastIngestAtIso: string | undefined, token: string): Promise<void> {
   "use step";
-  await start(ingestJamTopicChildWorkflow, [44801, lastIngestAtIso, token]);
+  await start(ingestJamTopicChildWorkflow, [topicId, lastIngestAtIso, token]);
 }
 
 async function spawnCategoryTopicChild(topic: DiscourseTopic, token: string): Promise<void> {
@@ -107,11 +108,11 @@ async function startAndWaitForChild(
 }
 
 /**
- * The daily ingest, as a durable workflow. Fans out one child workflow for
- * the jam topic and one per active category-5 topic, waits for all of them
- * (tolerating individual failures via Promise.allSettled), then aggregates
- * totals and runs the end-of-run bookkeeping (post count, stat snapshots,
- * ingest_log row) once everything has settled.
+ * The daily ingest, as a durable workflow. Fans out one child workflow per
+ * active jam topic and one per active category-5 topic, waits for all of
+ * them (tolerating individual failures via Promise.allSettled), then
+ * aggregates totals and runs the end-of-run bookkeeping (post count, stat
+ * snapshots, ingest_log row) once everything has settled.
  */
 export async function ingestOnceWorkflow() {
   "use workflow";
@@ -120,15 +121,19 @@ export async function ingestOnceWorkflow() {
   const lastIngestAt = lastIngestAtIso ? new Date(lastIngestAtIso) : undefined;
   const startedAt = new Date().toISOString();
 
+  const activeJamTopics = await listActiveJamTopics(lastIngestAt);
   const activeTopics = await listActiveCategoryTopics(5, 20, lastIngestAt);
   console.log(
-    `[ingest] fanning out to ${activeTopics.length + 1} child workflows: jam-44801, ${activeTopics
-      .map((t) => `topic-${t.id} ("${t.title}")`)
-      .join(", ")}`
+    `[ingest] fanning out to ${activeJamTopics.length + activeTopics.length} child workflows: ` +
+      `${activeJamTopics.map((t) => `jam-${t.id} ("${t.title}")`).join(", ")}` +
+      (activeJamTopics.length && activeTopics.length ? ", " : "") +
+      `${activeTopics.map((t) => `topic-${t.id} ("${t.title}")`).join(", ")}`
   );
 
   const settled = await Promise.allSettled([
-    startAndWaitForChild("jam-44801", (token) => spawnJamChild(lastIngestAtIso, token)),
+    ...activeJamTopics.map((topic) =>
+      startAndWaitForChild(`jam-${topic.id}`, (token) => spawnJamChild(topic.id, lastIngestAtIso, token))
+    ),
     ...activeTopics.map((topic) =>
       startAndWaitForChild(`topic-${topic.id}`, (token) => spawnCategoryTopicChild(topic, token))
     ),
@@ -167,5 +172,5 @@ export async function ingestOnceWorkflow() {
     errors,
   });
 
-  return { jams: 1, games, posts, errors };
+  return { jams: activeJamTopics.length, games, posts, errors };
 }

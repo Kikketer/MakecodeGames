@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
-import { refreshGameReactions, ingestPost, ingestCategoryTopics, ingestJamTopic, ingestOnce, listActiveCategoryTopics } from "./ingest-games";
+import { refreshGameReactions, ingestPost, ingestCategoryTopics, ingestJamTopic, ingestOnce, listActiveCategoryTopics, listActiveJamTopics, listAllJamTopics } from "./ingest-games";
 
 const mockSupabase = vi.hoisted(() => ({ from: vi.fn(), rpc: vi.fn() }));
 
@@ -713,6 +713,25 @@ describe("ingestOnce", () => {
       .mockImplementationOnce(() =>
         Promise.resolve(
           jsonResponse({
+            topic_list: {
+              topics: [
+                {
+                  id: 44801,
+                  title: "Announcement: Mini Game Jam #1 - Test Jam!",
+                  posts_count: 1,
+                  bumped_at: "2026-08-04T10:00:00.000Z",
+                  category_id: 13,
+                  views: 50,
+                  created_at: "2026-08-01T00:00:00.000Z",
+                },
+              ],
+            },
+          })
+        )
+      )
+      .mockImplementationOnce(() =>
+        Promise.resolve(
+          jsonResponse({
             categories: [
               { id: 13, name: "Jams", slug: "jams" },
               { id: 5, name: "Games", slug: "games" },
@@ -724,7 +743,7 @@ describe("ingestOnce", () => {
         Promise.resolve(
           jsonResponse({
             id: 44801,
-            title: "Jam #1",
+            title: "Announcement: Mini Game Jam #1 - Test Jam!",
             category_id: 13,
             posts_count: 1,
             views: 50,
@@ -947,6 +966,250 @@ describe("listActiveCategoryTopics", () => {
     const topics = await listActiveCategoryTopics(5, 10);
 
     expect(topics.map((t) => t.id)).toEqual([1, 2]);
+  });
+});
+
+describe("listActiveJamTopics", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-08-08T12:00:00.000Z");
+    mockFetch = vi.fn();
+    vi.stubGlobal("fetch", mockFetch);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("filters tagged topics by title pattern and activity window", async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({
+        topic_list: {
+          topics: [
+            {
+              id: 45257,
+              title: "Announcement: Mini Game Jam #37 - Corporation Jam!",
+              posts_count: 52,
+              bumped_at: "2026-08-07T10:00:00.000Z",
+              category_id: 5,
+              views: 500,
+              created_at: "2026-08-04T00:00:00.000Z",
+            },
+            {
+              id: 44801,
+              title: "Announcement: Mini Game Jam #36 - Bird Jam!",
+              posts_count: 40,
+              bumped_at: "2026-08-07T10:00:00.000Z",
+              category_id: 5,
+              views: 400,
+              created_at: "2026-07-04T00:00:00.000Z",
+            },
+            {
+              id: 43150,
+              title: "Design an Ability For Conquest Of Duat!",
+              posts_count: 10,
+              bumped_at: "2026-08-07T10:00:00.000Z",
+              category_id: 5,
+              views: 100,
+              created_at: "2026-07-01T00:00:00.000Z",
+            },
+            {
+              id: 43779,
+              title: "Brainiac game jam 2026",
+              posts_count: 5,
+              bumped_at: "2026-08-07T10:00:00.000Z",
+              category_id: 5,
+              views: 50,
+              created_at: "2026-07-15T00:00:00.000Z",
+            },
+          ],
+          more_topics_url: "/tag/mini-game-jam?page=1",
+        },
+      })
+    );
+
+    const topics = await listActiveJamTopics(new Date("2026-08-07T00:00:00.000Z"));
+
+    expect(topics.map((t) => t.id)).toEqual([45257, 44801]);
+    expect(mockFetch).toHaveBeenCalledWith("https://forum.makecode.com/tag/mini-game-jam.json", {
+      headers: { Accept: "application/json" },
+    });
+  });
+
+  it("excludes jam topics outside the 2-day activity window", async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({
+        topic_list: {
+          topics: [
+            {
+              id: 45257,
+              title: "Announcement: Mini Game Jam #37 - Corporation Jam!",
+              posts_count: 52,
+              bumped_at: "2026-08-08T10:00:00.000Z",
+              category_id: 5,
+              views: 500,
+              created_at: "2026-08-04T00:00:00.000Z",
+            },
+            {
+              id: 44801,
+              title: "Announcement: Mini Game Jam #36 - Bird Jam!",
+              posts_count: 40,
+              bumped_at: "2026-07-10T10:00:00.000Z",
+              category_id: 5,
+              views: 400,
+              created_at: "2026-07-04T00:00:00.000Z",
+            },
+          ],
+        },
+      })
+    );
+
+    const topics = await listActiveJamTopics(new Date("2026-08-07T00:00:00.000Z"));
+
+    // Jam #37 is active (bumped today), Jam #36 is not (bumped in July)
+    expect(topics.map((t) => t.id)).toEqual([45257]);
+  });
+
+  it("returns empty array when the tag endpoint returns null", async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse(null));
+
+    const topics = await listActiveJamTopics();
+
+    expect(topics).toEqual([]);
+  });
+
+  it("returns all jam topics on the first run (no lastIngestAt) regardless of activity", async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({
+        topic_list: {
+          topics: [
+            {
+              id: 45257,
+              title: "Announcement: Mini Game Jam #37 - Corporation Jam!",
+              posts_count: 52,
+              bumped_at: "2026-08-08T10:00:00.000Z",
+              category_id: 5,
+              views: 500,
+              created_at: "2026-08-04T00:00:00.000Z",
+            },
+            {
+              id: 44801,
+              title: "Announcement: Mini Game Jam #36 - Bird Jam!",
+              posts_count: 40,
+              bumped_at: "2026-01-10T10:00:00.000Z",
+              category_id: 5,
+              views: 400,
+              created_at: "2026-07-04T00:00:00.000Z",
+            },
+            {
+              id: 43150,
+              title: "Design an Ability For Conquest Of Duat!",
+              posts_count: 10,
+              bumped_at: "2026-08-07T10:00:00.000Z",
+              category_id: 5,
+              views: 100,
+              created_at: "2026-07-01T00:00:00.000Z",
+            },
+          ],
+        },
+      })
+    );
+
+    // No lastIngestAt → first run: return all title-matching jams, even old ones
+    const topics = await listActiveJamTopics();
+
+    expect(topics.map((t) => t.id)).toEqual([45257, 44801]);
+  });
+});
+
+describe("listAllJamTopics", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFetch = vi.fn();
+    vi.stubGlobal("fetch", mockFetch);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("pages through all results and filters by title pattern", async () => {
+    // Page 0: 30 topics (2 non-jam + 28 jams), more_topics_url present
+    // Page 1: 9 topics (2 non-jam + 7 jams), no more_topics_url
+    const page0Jams = Array.from({ length: 28 }, (_, i) => ({
+      id: 1000 + i,
+      title: `Announcement: Mini Game Jam #${i + 1} - Jam ${i + 1}!`,
+      posts_count: 10,
+      bumped_at: "2026-08-01T00:00:00.000Z",
+      category_id: 5,
+      views: 100,
+      created_at: "2026-01-01T00:00:00.000Z",
+    }));
+    const page1Jams = Array.from({ length: 7 }, (_, i) => ({
+      id: 2000 + i,
+      title: `Announcement: Mini Game Jam #${i + 29} - Jam ${i + 29}!`,
+      posts_count: 10,
+      bumped_at: "2026-08-01T00:00:00.000Z",
+      category_id: 5,
+      views: 100,
+      created_at: "2026-01-01T00:00:00.000Z",
+    }));
+
+    mockFetch
+      .mockResolvedValueOnce(
+        jsonResponse({
+          topic_list: {
+            topics: [
+              ...page0Jams,
+              { id: 43150, title: "Design an Ability For Conquest Of Duat!", posts_count: 10, bumped_at: "2026-08-01T00:00:00.000Z", category_id: 5, views: 100, created_at: "2026-07-01T00:00:00.000Z" },
+              { id: 43779, title: "Brainiac game jam 2026", posts_count: 5, bumped_at: "2026-08-01T00:00:00.000Z", category_id: 5, views: 50, created_at: "2026-07-15T00:00:00.000Z" },
+            ],
+            more_topics_url: "/tag/mini-game-jam?page=1",
+          },
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          topic_list: {
+            topics: [
+              ...page1Jams,
+              { id: 43150, title: "Design an Ability For Conquest Of Duat!", posts_count: 10, bumped_at: "2026-08-01T00:00:00.000Z", category_id: 5, views: 100, created_at: "2026-07-01T00:00:00.000Z" },
+              { id: 43779, title: "Brainiac game jam 2026", posts_count: 5, bumped_at: "2026-08-01T00:00:00.000Z", category_id: 5, views: 50, created_at: "2026-07-15T00:00:00.000Z" },
+            ],
+          },
+        })
+      );
+
+    const topics = await listAllJamTopics();
+
+    // 28 + 7 = 35 jam topics, excluding the 4 non-jam topics
+    expect(topics).toHaveLength(35);
+    expect(topics.every((t) => /mini game jam #\d+/i.test(t.title))).toBe(true);
+    expect(topics.some((t) => t.id === 43150)).toBe(false);
+    expect(topics.some((t) => t.id === 43779)).toBe(false);
+    expect(mockFetch).toHaveBeenCalledWith("https://forum.makecode.com/tag/mini-game-jam.json", {
+      headers: { Accept: "application/json" },
+    });
+    expect(mockFetch).toHaveBeenCalledWith("https://forum.makecode.com/tag/mini-game-jam.json?page=1", {
+      headers: { Accept: "application/json" },
+    });
+  });
+
+  it("stops when a page has no topics", async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({
+        topic_list: {
+          topics: [],
+        },
+      })
+    );
+
+    const topics = await listAllJamTopics();
+
+    expect(topics).toEqual([]);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 });
 
