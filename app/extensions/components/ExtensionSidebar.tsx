@@ -8,15 +8,13 @@ export function ExtensionSidebar({
   owner,
   repo,
   tools,
-  basePath: basePathProp,
 }: {
   owner: string;
   repo: string;
   tools: ExtensionTool[];
-  basePath?: string;
 }) {
   const pathname = usePathname();
-  const basePath = basePathProp ?? `/extensions/${owner}/${repo}`;
+  const basePath = `/extensions/${owner}/${repo}`;
 
   const groups = new Map<string, ExtensionTool[]>();
   for (const tool of tools) {

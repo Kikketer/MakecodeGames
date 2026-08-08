@@ -19,7 +19,7 @@
 
 import { parseExtension } from "../lib/extension-docs/parse-extension";
 import { generateDocumentation } from "../lib/extension-docs/generate";
-import { writeExtensionDocFile, writeExtensionDocJson, updateExtensionsIndex } from "../lib/extension-docs/write-doc";
+import { writeExtensionDocFile, updateExtensionsIndex } from "../lib/extension-docs/write-doc";
 
 function parseArgs(argv: string[]): {
   ownerRepo: string;
@@ -117,10 +117,6 @@ async function main() {
 
   if (!args.dryRun) {
     await updateExtensionsIndex(doc, { basePath });
-    // Also write JSON to the project's extensions-generated directory so the
-    // /extensions-beta route can render it for visual comparison. This always
-    // goes to the project root (not --output) so the dev server can find it.
-    await writeExtensionDocJson(doc, { dryRun: false });
   }
 
   console.log(`\n=== Done ===`);
