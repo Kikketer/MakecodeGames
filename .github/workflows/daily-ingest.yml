@@ -15,5 +15,5 @@ jobs:
         # results in the Vercel dashboard (Observability > Workflows) or the
         # ingest_log table, not this job's logs.
         run: |
-          curl -s -X GET "${{ vars.INGEST_URL }}/api/games/ingest" \
+          curl -sS --fail-with-body -X GET "${{ vars.INGEST_URL }}/api/games/ingest" \
             -H "Authorization: Bearer ${{ secrets.INGEST_SECRET }}"

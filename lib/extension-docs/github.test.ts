@@ -12,6 +12,7 @@ import {
   cleanupExistingBranchAndPr,
   createDocumentationPullRequest,
   readFileFromRepo,
+  listRepoDirectory,
   type GitHubFile,
   type RepoRef,
 } from "./github";
@@ -159,6 +160,42 @@ describe("readFileFromRepo", () => {
 
     const result = await readFileFromRepo("nonexistent.ts", "main", TEST_REPO);
     expect(result).toBeUndefined();
+  });
+});
+
+describe("listRepoDirectory", () => {
+  it("returns directory entries when the path is a directory", async () => {
+    mockFetchSequence([
+      {
+        status: 200,
+        body: [
+          { name: "main.ts", path: "main.ts", type: "file" },
+          { name: "docs", path: "docs", type: "dir" },
+          { name: "pxt.json", path: "pxt.json", type: "file" },
+        ],
+      },
+    ]);
+
+    const entries = await listRepoDirectory("", "main", TEST_REPO);
+    expect(entries).toHaveLength(3);
+    expect(entries[0]).toEqual({ name: "main.ts", path: "main.ts", type: "file" });
+    expect(entries[1]).toEqual({ name: "docs", path: "docs", type: "dir" });
+  });
+
+  it("returns empty array when directory does not exist (404)", async () => {
+    mockFetchSequence([{ status: 404, body: { message: "Not Found" } }]);
+
+    const entries = await listRepoDirectory("docs", "main", TEST_REPO);
+    expect(entries).toEqual([]);
+  });
+
+  it("returns empty array when the API returns a single file object (not an array)", async () => {
+    mockFetchSequence([
+      { status: 200, body: { name: "main.ts", path: "main.ts", type: "file" } },
+    ]);
+
+    const entries = await listRepoDirectory("main.ts", "main", TEST_REPO);
+    expect(entries).toEqual([]);
   });
 });
 
