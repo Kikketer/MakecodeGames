@@ -1,7 +1,11 @@
 import type { ExtensionDoc, ExtensionTool } from "@/content/extensions/types";
+import { pxtArcadeVectorMath } from "@/content/extensions/robo-technical-group/pxt-arcade-vector-math";
 import { arcadeSpriteUtil } from "@/content/extensions/jwunderl/arcade-sprite-util";
 
-export const extensions: ExtensionDoc[] = [arcadeSpriteUtil];
+export const extensions: ExtensionDoc[] = [
+  arcadeSpriteUtil,
+  pxtArcadeVectorMath,
+];
 
 export function getExtension(owner: string, repo: string): ExtensionDoc | undefined {
   return extensions.find((extension) => extension.owner === owner && extension.repo === repo);
