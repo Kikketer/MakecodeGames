@@ -163,6 +163,28 @@ describe("shouldRegenerateExtension", () => {
     expect(result.regenerate).toBe(true);
     expect(result.storedSha).toBeNull();
   });
+
+  it("returns regenerate=true when force=true even if SHA is unchanged", async () => {
+    mockGetSha.mockResolvedValue("sameSHA");
+    mockSelectResponse([
+      {
+        owner: "owner",
+        repo: "repo",
+        last_commit_sha: "sameSHA",
+        last_generated_at: "2026-08-01T00:00:00Z",
+        last_pr_number: 10,
+        last_pr_url: "https://github.com/test/pr/10",
+        status: "in_progress",
+        last_error: null,
+      },
+    ]);
+
+    const result = await shouldRegenerateExtension("owner", "repo", undefined, true);
+
+    expect(result.regenerate).toBe(true);
+    expect(result.currentSha).toBe("sameSHA");
+    expect(result.storedSha).toBe("sameSHA");
+  });
 });
 
 describe("recordSuccessfulGeneration", () => {
@@ -198,18 +220,26 @@ describe("recordSuccessfulGeneration", () => {
 });
 
 describe("recordFailedGeneration", () => {
-  it("upserts the status with failed state and error message", async () => {
+  it("upserts the status with failed state and error message, without updating last_commit_sha", async () => {
     const chain = mockUpsertResponse(null);
 
-    await recordFailedGeneration("owner", "repo", "sha", "Gemini API timeout");
+    await recordFailedGeneration("owner", "repo", "Gemini API timeout");
 
     expect(chain.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         owner: "owner",
         repo: "repo",
-        last_commit_sha: "sha",
         status: "failed",
         last_error: "Gemini API timeout",
+      }),
+      { onConflict: "owner,repo" },
+    );
+    // Critical: last_commit_sha must NOT be set on failure, otherwise
+    // shouldRegenerateExtension will see the SHA unchanged and skip
+    // the extension forever.
+    expect(chain.upsert).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        last_commit_sha: expect.anything(),
       }),
       { onConflict: "owner,repo" },
     );

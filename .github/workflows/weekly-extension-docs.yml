@@ -14,6 +14,11 @@ on:
         description: "Single extension to document (owner/repo), or empty for the full batch."
         required: false
         default: ""
+      force:
+        description: "Force re-documentation even if the extension SHA hasn't changed (bypasses change detection)."
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   document-extensions:
@@ -31,13 +36,23 @@ jobs:
           VERCEL_URL: ${{ inputs.vercel_url || vars.INGEST_URL }}
           INGEST_SECRET: ${{ secrets.INGEST_SECRET }}
           EXTENSION: ${{ inputs.extension }}
+          FORCE: ${{ inputs.force == true && 'true' || '' }}
         run: |
+          FORCE_QUERY=""
+          if [ -n "$FORCE" ]; then
+            FORCE_QUERY="&force=true"
+          fi
           if [ -n "$EXTENSION" ]; then
             echo "Documenting single extension: $EXTENSION"
-            curl -sS --fail-with-body -X GET "${VERCEL_URL}/api/extensions/document?extension=${EXTENSION}" \
+            curl -sS --fail-with-body -X GET "${VERCEL_URL}/api/extensions/document?extension=${EXTENSION}${FORCE_QUERY}" \
               -H "Authorization: Bearer ${INGEST_SECRET}"
           else
             echo "Documenting full batch of extensions"
-            curl -sS --fail-with-body -X GET "${VERCEL_URL}/api/extensions/document" \
-              -H "Authorization: Bearer ${INGEST_SECRET}"
+            if [ -n "$FORCE" ]; then
+              curl -sS --fail-with-body -X GET "${VERCEL_URL}/api/extensions/document?force=true" \
+                -H "Authorization: Bearer ${INGEST_SECRET}"
+            else
+              curl -sS --fail-with-body -X GET "${VERCEL_URL}/api/extensions/document" \
+                -H "Authorization: Bearer ${INGEST_SECRET}"
+            fi
           fi

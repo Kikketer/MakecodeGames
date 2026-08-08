@@ -51,7 +51,7 @@ function formatTool(tool: ExtensionTool, indent: number): string {
     lines.push(`${pad2}parameters: [`);
     for (const param of tool.parameters) {
       const parts = [`name: ${JSON.stringify(param.name)}`, `type: ${JSON.stringify(param.type)}`];
-      if (param.default !== undefined) parts.push(`default: ${JSON.stringify(param.default)}`);
+      if (param.default !== undefined) parts.push(`default: ${JSON.stringify(String(param.default))}`);
       parts.push(`meaning: ${JSON.stringify(param.meaning)}`);
       lines.push(`${pad2}  { ${parts.join(", ")} },`);
     }
