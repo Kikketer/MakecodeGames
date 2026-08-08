@@ -1,7 +1,11 @@
 import type { ExtensionDoc, ExtensionTool } from "@/content/extensions/types";
+import { retrofx } from "@/content/extensions/CrzLe0723/RetroFx";
 import { arcadeSpriteUtil } from "@/content/extensions/jwunderl/arcade-sprite-util";
 
-export const extensions: ExtensionDoc[] = [arcadeSpriteUtil];
+export const extensions: ExtensionDoc[] = [
+  arcadeSpriteUtil,
+  retrofx,
+];
 
 export function getExtension(owner: string, repo: string): ExtensionDoc | undefined {
   return extensions.find((extension) => extension.owner === owner && extension.repo === repo);
