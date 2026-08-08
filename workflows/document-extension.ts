@@ -118,7 +118,9 @@ async function recordFailureStep(owner: string, repo: string, sha: string, error
 
 async function parseExtensionStep(owner: string, repo: string) {
   "use step";
-  return parseExtension(owner, repo);
+  // useApi: true fetches source via GitHub Contents API instead of git clone,
+  // because the Vercel Workflow sandbox has no git binary.
+  return parseExtension(owner, repo, { useApi: true });
 }
 
 async function generateDocumentationStep(parsed: Awaited<ReturnType<typeof parseExtension>>) {

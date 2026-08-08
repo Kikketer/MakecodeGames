@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { parseBlocks, parseEnums } from "./parse-extension";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { parseBlocks, parseEnums, parseExtension } from "./parse-extension";
 
 // A representative snippet of a MakeCode Arcade extension source file,
 // matching the real //% annotation patterns from arcade-sprite-util.
@@ -209,5 +209,175 @@ describe("parseEnums", () => {
     const enums = parseEnums(SAMPLE_SOURCE);
     const labels = enums[0].members.map((m) => m.blockLabel);
     expect(labels).toEqual(["flip horizontal", "flip vertical", "rotate 90 degrees clockwise"]);
+  });
+});
+
+// --- Tests for parseExtension with useApi: true (GitHub Contents API path) ---
+
+const PXT_JSON = JSON.stringify({
+  name: "test-extension",
+  description: "A test extension",
+  files: ["main.ts"],
+});
+
+function mockFetchResponses(responses: { status: number; body: unknown }[]) {
+  let idx = 0;
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+    const resp = responses[idx] ?? responses[responses.length - 1];
+    idx++;
+    return {
+      ok: resp.status >= 200 && resp.status < 300,
+      status: resp.status,
+      json: async () => resp.body,
+      text: async () => (typeof resp.body === "string" ? resp.body : JSON.stringify(resp.body)),
+    } as Response;
+  });
+}
+
+function encodeBase64(content: string): string {
+  return Buffer.from(content).toString("base64");
+}
+
+beforeEach(() => {
+  process.env.GITHUB_TOKEN = "fake-token";
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  delete process.env.GITHUB_TOKEN;
+});
+
+describe("parseExtension with useApi", () => {
+  it("fetches source via GitHub Contents API and parses blocks", async () => {
+    mockFetchResponses([
+      // getDefaultBranchSha: repo info
+      { status: 200, body: { default_branch: "main" } },
+      // getDefaultBranchSha: ref
+      { status: 200, body: { object: { sha: "headsha" } } },
+      // readFileFromRepo: pxt.json
+      { status: 200, body: { content: encodeBase64(PXT_JSON), encoding: "base64" } },
+      // readFileFromRepo: main.ts (from pxt.json files list)
+      { status: 200, body: { content: encodeBase64(SAMPLE_SOURCE), encoding: "base64" } },
+      // listRepoDirectory: root scan
+      {
+        status: 200,
+        body: [
+          { name: "main.ts", path: "main.ts", type: "file" },
+          { name: "pxt.json", path: "pxt.json", type: "file" },
+        ],
+      },
+      // listRepoDirectory: docs/ (404 — no docs folder)
+      { status: 404, body: { message: "Not Found" } },
+      // readFileFromRepo: README.md (404)
+      { status: 404, body: { message: "Not Found" } },
+    ]);
+
+    const result = await parseExtension("testowner", "testrepo", { useApi: true });
+
+    expect(result.owner).toBe("testowner");
+    expect(result.repo).toBe("testrepo");
+    expect(result.pxtName).toBe("test-extension");
+    expect(result.pxtDescription).toBe("A test extension");
+    expect(result.namespace).toBe("spriteutils");
+    expect(result.blocks).toHaveLength(5);
+    expect(result.enums).toHaveLength(1);
+    expect(result.sourceFiles["main.ts"]).toBeDefined();
+    expect(result.readme).toBeUndefined();
+    expect(Object.keys(result.docsFiles)).toHaveLength(0);
+  });
+
+  it("fetches docs and README when they exist", async () => {
+    mockFetchResponses([
+      // getDefaultBranchSha: repo info
+      { status: 200, body: { default_branch: "main" } },
+      // getDefaultBranchSha: ref
+      { status: 200, body: { object: { sha: "headsha" } } },
+      // readFileFromRepo: pxt.json
+      { status: 200, body: { content: encodeBase64(PXT_JSON), encoding: "base64" } },
+      // readFileFromRepo: main.ts
+      { status: 200, body: { content: encodeBase64(SAMPLE_SOURCE), encoding: "base64" } },
+      // listRepoDirectory: root scan
+      {
+        status: 200,
+        body: [
+          { name: "main.ts", path: "main.ts", type: "file" },
+        ],
+      },
+      // listRepoDirectory: docs/
+      {
+        status: 200,
+        body: [
+          { name: "usage.md", path: "docs/usage.md", type: "file" },
+        ],
+      },
+      // readFileFromRepo: docs/usage.md
+      { status: 200, body: { content: encodeBase64("# Usage\n\nHow to use"), encoding: "base64" } },
+      // readFileFromRepo: README.md
+      { status: 200, body: { content: encodeBase64("# Test Extension"), encoding: "base64" } },
+    ]);
+
+    const result = await parseExtension("testowner", "testrepo", { useApi: true });
+
+    expect(result.readme).toBe("# Test Extension");
+    expect(result.docsFiles["usage.md"]).toBe("# Usage\n\nHow to use");
+  });
+
+  it("throws if pxt.json is not found", async () => {
+    mockFetchResponses([
+      // getDefaultBranchSha: repo info
+      { status: 200, body: { default_branch: "main" } },
+      // getDefaultBranchSha: ref
+      { status: 200, body: { object: { sha: "headsha" } } },
+      // readFileFromRepo: pxt.json (404)
+      { status: 404, body: { message: "Not Found" } },
+    ]);
+
+    await expect(parseExtension("testowner", "testrepo", { useApi: true })).rejects.toThrow(
+      "pxt.json not found in testowner/testrepo",
+    );
+  });
+
+  it("picks up .ts files from root scan that are not in pxt.json files list", async () => {
+    const pxtWithOneFile = JSON.stringify({
+      name: "test-ext",
+      files: ["main.ts"],
+    });
+    const EXTRA_SOURCE = `namespace extra {
+      //% block="extra block"
+      //% blockId=extrablock
+      export function extraBlock(): void {}
+    }`;
+
+    mockFetchResponses([
+      // getDefaultBranchSha: repo info
+      { status: 200, body: { default_branch: "main" } },
+      // getDefaultBranchSha: ref
+      { status: 200, body: { object: { sha: "headsha" } } },
+      // readFileFromRepo: pxt.json
+      { status: 200, body: { content: encodeBase64(pxtWithOneFile), encoding: "base64" } },
+      // readFileFromRepo: main.ts (from pxt.json)
+      { status: 200, body: { content: encodeBase64(SAMPLE_SOURCE), encoding: "base64" } },
+      // listRepoDirectory: root scan — finds extra.ts not in pxt.json
+      {
+        status: 200,
+        body: [
+          { name: "main.ts", path: "main.ts", type: "file" },
+          { name: "extra.ts", path: "extra.ts", type: "file" },
+        ],
+      },
+      // readFileFromRepo: extra.ts (root scan finds it)
+      { status: 200, body: { content: encodeBase64(EXTRA_SOURCE), encoding: "base64" } },
+      // listRepoDirectory: docs/ (404)
+      { status: 404, body: { message: "Not Found" } },
+      // readFileFromRepo: README.md (404)
+      { status: 404, body: { message: "Not Found" } },
+    ]);
+
+    const result = await parseExtension("testowner", "testrepo", { useApi: true });
+
+    expect(result.sourceFiles["main.ts"]).toBeDefined();
+    expect(result.sourceFiles["extra.ts"]).toBeDefined();
+    // 5 blocks from SAMPLE_SOURCE + 1 from EXTRA_SOURCE
+    expect(result.blocks).toHaveLength(6);
   });
 });

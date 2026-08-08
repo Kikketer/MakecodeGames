@@ -3,6 +3,12 @@ import { join } from "path";
 import { exec } from "child_process";
 import { promisify } from "util";
 import type { ParsedBlock, ParsedEnum, ParsedExtension, ParsedParameter } from "./types";
+import {
+  readFileFromRepo,
+  listRepoDirectory,
+  getDefaultBranchSha,
+  type RepoRef,
+} from "./github";
 
 const execAsync = promisify(exec);
 
@@ -423,14 +429,108 @@ async function readDocsFiles(repoDir: string): Promise<Record<string, string>> {
 }
 
 /**
+ * Fetch extension source files via the GitHub Contents API instead of git clone.
+ * This is used in the Vercel Workflow sandbox where no git binary is available.
+ *
+ * Fetches: pxt.json, all .ts files (from pxt.json files list + root directory scan),
+ * docs/*.md, and README.md.
+ */
+async function fetchExtensionSourceViaApi(
+  owner: string,
+  repo: string,
+): Promise<{
+  pxt: { name: string; description?: string; files: string[]; testFiles?: string[] };
+  sourceFiles: Record<string, string>;
+  docsFiles: Record<string, string>;
+  readme?: string;
+}> {
+  const repoRef: RepoRef = { owner, name: repo };
+  const { branch } = await getDefaultBranchSha(repoRef);
+
+  // 1. Fetch pxt.json
+  const pxtRaw = await readFileFromRepo("pxt.json", branch, repoRef);
+  if (!pxtRaw) throw new Error(`pxt.json not found in ${owner}/${repo}`);
+  const pxt = JSON.parse(pxtRaw) as {
+    name: string;
+    description?: string;
+    files: string[];
+    testFiles?: string[];
+  };
+
+  // 2. Fetch .ts files listed in pxt.json
+  const sourceFiles: Record<string, string> = {};
+  for (const file of pxt.files) {
+    if (!file.endsWith(".ts")) continue;
+    const content = await readFileFromRepo(file, branch, repoRef);
+    if (content) sourceFiles[file] = content;
+  }
+
+  // 3. Scan root directory for any .ts files not in pxt.json
+  const rootEntries = await listRepoDirectory("", branch, repoRef);
+  for (const entry of rootEntries) {
+    if (entry.type !== "file" || !entry.name.endsWith(".ts")) continue;
+    if (sourceFiles[entry.name]) continue;
+    const content = await readFileFromRepo(entry.name, branch, repoRef);
+    if (content) sourceFiles[entry.name] = content;
+  }
+
+  // 4. Fetch docs/*.md files
+  const docsFiles: Record<string, string> = {};
+  const docsEntries = await listRepoDirectory("docs", branch, repoRef);
+  for (const entry of docsEntries) {
+    if (entry.type !== "file" || !entry.name.endsWith(".md")) continue;
+    const content = await readFileFromRepo(`docs/${entry.name}`, branch, repoRef);
+    if (content) docsFiles[entry.name] = content;
+  }
+
+  // 5. Fetch README.md
+  const readme = await readFileFromRepo("README.md", branch, repoRef) ?? undefined;
+
+  return { pxt, sourceFiles, docsFiles, readme };
+}
+
+/**
  * Full extension parse: clone, read pxt.json, extract blocks and enums.
  * If `repoDir` is provided, skip cloning and parse from that directory.
+ * If `useApi` is true, fetch source files via the GitHub Contents API
+ * (used in the Vercel Workflow sandbox where git is not available).
  */
 export async function parseExtension(
   owner: string,
   repo: string,
-  options: { repoDir?: string; cloneDir?: string } = {},
+  options: { repoDir?: string; cloneDir?: string; useApi?: boolean } = {},
 ): Promise<ParsedExtension> {
+  if (options.useApi) {
+    const { pxt, sourceFiles, docsFiles, readme } = await fetchExtensionSourceViaApi(owner, repo);
+
+    // Parse blocks and enums from all source files
+    const allBlocks: ParsedBlock[] = [];
+    const allEnums: ParsedEnum[] = [];
+    let namespace: string | undefined;
+
+    for (const [filename, source] of Object.entries(sourceFiles)) {
+      if (filename === "test.ts" || filename.startsWith("test-")) continue;
+
+      allBlocks.push(...parseBlocks(source));
+      allEnums.push(...parseEnums(source));
+      if (!namespace) namespace = extractNamespace(source);
+    }
+
+    return {
+      owner,
+      repo,
+      pxtName: pxt.name,
+      pxtDescription: pxt.description,
+      namespace: namespace ?? "extension",
+      packageSlug: `github:${owner}/${repo}`,
+      sourceFiles,
+      blocks: allBlocks,
+      enums: allEnums,
+      docsFiles,
+      readme,
+    };
+  }
+
   let repoDir = options.repoDir;
   const shouldCleanup = !repoDir;
 

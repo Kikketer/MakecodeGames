@@ -154,6 +154,42 @@ export async function readFileFromRepo(
   return data.content;
 }
 
+/** A directory entry from the Contents API. */
+export interface RepoDirEntry {
+  name: string;
+  path: string;
+  type: "file" | "dir";
+}
+
+/**
+ * List the contents of a directory in a repo at a given ref.
+ * Uses the Contents API, which returns an array when the path is a directory.
+ * Returns an empty array if the directory does not exist (404).
+ */
+export async function listRepoDirectory(
+  path: string,
+  ref: string,
+  repo: RepoRef,
+  token?: string,
+): Promise<RepoDirEntry[]> {
+  const response = await ghFetch(
+    `/repos/${repo.owner}/${repo.name}/contents/${path}?ref=${ref}`,
+    {},
+    token,
+  );
+  if (response.status === 404) return [];
+  if (!response.ok) {
+    throw new Error(`GitHub API ${response.status} listing ${path}: ${await response.text()}`);
+  }
+  const data = await response.json();
+  if (!Array.isArray(data)) return [];
+  return data.map((entry: { name: string; path: string; type: string }) => ({
+    name: entry.name,
+    path: entry.path,
+    type: entry.type as "file" | "dir",
+  }));
+}
+
 /** Get the latest commit SHA for an extension repo (for change detection). */
 export async function getExtensionRepoHeadSha(owner: string, repo: string, token?: string): Promise<string> {
   // Get the repo's default branch, then resolve that branch's ref.
