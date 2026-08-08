@@ -1,7 +1,11 @@
 import type { ExtensionDoc, ExtensionTool } from "@/content/extensions/types";
+import { spriteWalls } from "@/content/extensions/Sonicblaston62/Sprite-Walls";
 import { arcadeSpriteUtil } from "@/content/extensions/jwunderl/arcade-sprite-util";
 
-export const extensions: ExtensionDoc[] = [arcadeSpriteUtil];
+export const extensions: ExtensionDoc[] = [
+  arcadeSpriteUtil,
+  spriteWalls,
+];
 
 export function getExtension(owner: string, repo: string): ExtensionDoc | undefined {
   return extensions.find((extension) => extension.owner === owner && extension.repo === repo);
