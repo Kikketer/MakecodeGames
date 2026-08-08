@@ -146,26 +146,8 @@ export async function writeExtensionDocJson(
   return filePath;
 }
 
-/**
- * Update the extensions index file to import and register a new extension.
- * This is idempotent — if the extension is already registered, it's a no-op.
- */
-export async function updateExtensionsIndex(
-  doc: ExtensionDoc,
-  options: { basePath?: string; dryRun?: boolean } = {},
-): Promise<void> {
-  const basePath = options.basePath ?? process.cwd();
-  const indexPath = join(basePath, "content", "extensions", "index.ts");
-  const exportName = camelCaseExportName(doc.owner, doc.repo);
-  const importPath = `@/content/extensions/${doc.owner}/${doc.repo}`;
-
-  const { readFile } = await import("fs/promises");
-  let content: string;
-  try {
-    content = await readFile(indexPath, "utf-8");
-  } catch {
-    // Index doesn't exist — create it
-    content = `import type { ExtensionDoc, ExtensionTool } from "@/content/extensions/types";
+/** Default index.ts content when the file doesn't exist yet. */
+export const DEFAULT_INDEX_CONTENT = `import type { ExtensionDoc, ExtensionTool } from "@/content/extensions/types";
 
 export const extensions: ExtensionDoc[] = [];
 
@@ -186,17 +168,25 @@ export function sortedTools(extension: ExtensionDoc): ExtensionTool[] {
 
 export type { ExtensionDoc, ExtensionTool } from "@/content/extensions/types";
 `;
-  }
 
-  // Check if already imported
+/**
+ * Pure function: apply an index update for a new extension to the given
+ * index file content. Idempotent — if the extension is already imported,
+ * returns the content unchanged.
+ *
+ * Exported so the workflow can fetch index.ts from the GitHub API, apply
+ * the update in-memory, and commit the result without local file I/O.
+ */
+export function applyIndexUpdate(content: string, doc: ExtensionDoc): string {
+  const exportName = camelCaseExportName(doc.owner, doc.repo);
+  const importPath = `@/content/extensions/${doc.owner}/${doc.repo}`;
+
   if (content.includes(importPath)) {
-    console.log(`Index already imports ${importPath}, skipping`);
-    return;
+    return content;
   }
 
-  // Add import after the last import line
   const importLine = `import { ${exportName} } from "${importPath}";`;
-  const updatedContent = content
+  return content
     .replace(/^(import .*?;)$/m, (match) => `${match}\n${importLine}`)
     .replace(
       /export const extensions: ExtensionDoc\[\] = \[([^\]]*)\]/,
@@ -208,6 +198,33 @@ export type { ExtensionDoc, ExtensionTool } from "@/content/extensions/types";
         return `export const extensions: ExtensionDoc[] = [\n  ${exportName},\n]`;
       },
     );
+}
+
+/**
+ * Update the extensions index file to import and register a new extension.
+ * This is idempotent — if the extension is already registered, it's a no-op.
+ */
+export async function updateExtensionsIndex(
+  doc: ExtensionDoc,
+  options: { basePath?: string; dryRun?: boolean } = {},
+): Promise<void> {
+  const basePath = options.basePath ?? process.cwd();
+  const indexPath = join(basePath, "content", "extensions", "index.ts");
+
+  const { readFile } = await import("fs/promises");
+  let content: string;
+  try {
+    content = await readFile(indexPath, "utf-8");
+  } catch {
+    content = DEFAULT_INDEX_CONTENT;
+  }
+
+  const updatedContent = applyIndexUpdate(content, doc);
+
+  if (updatedContent === content) {
+    console.log(`Index already imports ${doc.owner}/${doc.repo}, skipping`);
+    return;
+  }
 
   if (options.dryRun) {
     console.log(`[dry-run] Would update ${indexPath}`);
