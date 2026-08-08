@@ -1,7 +1,11 @@
 import type { ExtensionDoc, ExtensionTool } from "@/content/extensions/types";
+import { arcadeTilemapAStar } from "@/content/extensions/jwunderl/arcade-tilemap-a-star";
 import { arcadeSpriteUtil } from "@/content/extensions/jwunderl/arcade-sprite-util";
 
-export const extensions: ExtensionDoc[] = [arcadeSpriteUtil];
+export const extensions: ExtensionDoc[] = [
+  arcadeSpriteUtil,
+  arcadeTilemapAStar,
+];
 
 export function getExtension(owner: string, repo: string): ExtensionDoc | undefined {
   return extensions.find((extension) => extension.owner === owner && extension.repo === repo);
