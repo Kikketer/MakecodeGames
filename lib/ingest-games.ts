@@ -630,6 +630,65 @@ async function fetchCategoryListingStep(
   return fetchJson(url);
 }
 
+/** Fetches one page of topics from a Discourse tag listing. Mirrors
+ * `fetchCategoryListingStep` but hits `/tag/{tag}.json` instead of a
+ * category. The tag endpoint is paginated (30 topics/page); the response
+ * includes `more_topics_url` when another page exists. */
+async function fetchTaggedTopicsStep(
+  tag: string,
+  page?: number
+): Promise<{ topic_list: { topics: DiscourseTopic[]; more_topics_url?: string | null } } | null> {
+  "use step";
+  const url = page
+    ? `${FORUM_BASE}/tag/${tag}.json?page=${page}`
+    : `${FORUM_BASE}/tag/${tag}.json`;
+  return fetchJson(url);
+}
+
+/** Title pattern that defines a mini game jam announcement topic. The
+ * `mini-game-jam` forum tag can be added to any post, so the tag alone
+ * isn't enough to identify jams — the title must match this pattern. */
+const MINI_GAME_JAM_TITLE_PATTERN = /mini game jam #\d+/i;
+
+/**
+ * Lists the mini game jam topics that are worth checking during a daily
+ * ingest run. Pulls the first page of the `mini-game-jam` tag listing
+ * (active topics bubble to the top, sorted by `bumped_at` descending),
+ * filters by the jam title pattern to exclude non-jam topics that happen
+ * to be tagged, then by the same 2-day activity window used by
+ * `listActiveCategoryTopics`.
+ */
+export async function listActiveJamTopics(lastIngestAt?: Date): Promise<DiscourseTopic[]> {
+  const tagged = await fetchTaggedTopicsStep("mini-game-jam");
+  if (!tagged) return [];
+  const jamTopics = tagged.topic_list.topics.filter((t) => MINI_GAME_JAM_TITLE_PATTERN.test(t.title));
+  // On the first ever run (no lastIngestAt), ingest every jam on the first
+  // page — mirrors listActiveCategoryTopics' first-run behavior. Subsequent
+  // runs only pick up jams bumped within the 2-day activity window.
+  if (!lastIngestAt) return jamTopics;
+  const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+  return jamTopics.filter((t) => isTopicActive(t, twoDaysAgo));
+}
+
+/**
+ * Lists ALL mini game jam topics from the `mini-game-jam` tag, paging
+ * through the entire listing (following `more_topics_url`) and filtering
+ * by the jam title pattern. Used by backfill to create `game_jams` rows
+ * for every historical jam (Jam #1 through the latest).
+ */
+export async function listAllJamTopics(): Promise<DiscourseTopic[]> {
+  const all: DiscourseTopic[] = [];
+  let page: number | undefined;
+  while (true) {
+    const listing = await fetchTaggedTopicsStep("mini-game-jam", page);
+    if (!listing || !listing.topic_list.topics.length) break;
+    all.push(...listing.topic_list.topics);
+    if (!listing.topic_list.more_topics_url) break;
+    page = (page ?? 0) + 1;
+  }
+  return all.filter((t) => MINI_GAME_JAM_TITLE_PATTERN.test(t.title));
+}
+
 export async function ingestJamTopic(
   topicId: number,
   lastIngestAt?: Date,
@@ -869,12 +928,15 @@ export async function backfillAll(
   const result: IngestResult = { jams: 0, games: 0, posts: 0, errors: [] };
   const log = options.onProgress || (() => {});
 
-  log("Backfilling jam topic 44801...");
-  const jam = await backfillJamTopic(44801, options.jamDelayMs ?? 1000);
-  result.jams = 1;
-  result.games += jam.games;
-  result.errors.push(...jam.errors);
-  log(`Jam topic done: ${jam.games} games, ${jam.errors.length} errors`);
+  const jamTopics = await listAllJamTopics();
+  log(`Backfilling ${jamTopics.length} jam topics...`);
+  for (const topic of jamTopics) {
+    const jam = await backfillJamTopic(topic.id, options.jamDelayMs ?? 1000);
+    result.jams++;
+    result.games += jam.games;
+    result.errors.push(...jam.errors);
+  }
+  log(`Jam topics done: ${result.jams} jams, ${result.games} games, ${result.errors.length} errors`);
 
   const sinceText = options.since ? options.since.toISOString() : "all time";
   log(`Backfilling category 5 topics since ${sinceText}...`);
@@ -957,10 +1019,13 @@ export async function ingestOnce(): Promise<IngestResult> {
     .single();
   const lastIngestAt = lastLog?.finished_at ? new Date(lastLog.finished_at as string) : undefined;
 
-  const jam = await ingestJamTopic(44801, lastIngestAt);
-  result.jams = 1;
-  result.games += jam.games;
-  result.errors.push(...jam.errors);
+  const jamTopics = await listActiveJamTopics(lastIngestAt);
+  for (const topic of jamTopics) {
+    const jam = await ingestJamTopic(topic.id, lastIngestAt);
+    result.jams++;
+    result.games += jam.games;
+    result.errors.push(...jam.errors);
+  }
 
   const cat = await ingestCategoryTopics(5, 20, lastIngestAt);
   result.games += cat.games;
