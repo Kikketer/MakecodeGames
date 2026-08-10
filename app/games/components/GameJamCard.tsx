@@ -6,7 +6,7 @@ import { GameWithStats } from "@/app/games/actions";
 import { recordClick } from "@/app/games/actions";
 import { LikeControl } from "./LikeControl";
 import { PlayControl } from "./PlayControl";
-import { PostedAt } from "./PostedAt";
+import { PostedAtTooltip } from "./PostedAt";
 
 export function GameJamCard({ game }: { game: GameWithStats }) {
   const [failed, setFailed] = useState(false);
@@ -16,13 +16,14 @@ export function GameJamCard({ game }: { game: GameWithStats }) {
     <article className="w-full border-4 border-makecode-yellow bg-white p-4 shadow-[4px_4px_0_#000000]">
       <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
-          <h3 className="truncate font-sans text-xl font-bold text-makecode-black" title={game.title}>
-            {game.title}
-          </h3>
+          <PostedAtTooltip
+            date={game.posted_at}
+            title={game.title}
+            titleClassName="truncate font-sans text-xl font-bold text-makecode-black"
+          />
           <p className="font-sans text-sm text-makecode-brown">{game.author_username || "Anonymous"}</p>
         </div>
         <div className="flex items-center gap-3">
-          <PostedAt date={game.posted_at} />
           <LikeControl game={game} />
           <PlayControl game={game} />
           {game.forum_url ? (

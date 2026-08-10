@@ -6,7 +6,7 @@ import { GameWithStats } from "@/app/games/actions";
 import { recordClick } from "@/app/games/actions";
 import { LikeControl } from "./LikeControl";
 import { PlayControl } from "./PlayControl";
-import { PostedAt } from "./PostedAt";
+import { PostedAtTooltip } from "./PostedAt";
 
 export function GameCard({ game }: { game: GameWithStats }) {
   const [failed, setFailed] = useState(false);
@@ -35,17 +35,16 @@ export function GameCard({ game }: { game: GameWithStats }) {
         )}
       </a>
       <div className="mt-3 flex flex-col gap-1">
-        <h3 className="truncate font-sans text-base font-bold text-makecode-black" title={game.title}>
-          {game.title}
-        </h3>
+        <PostedAtTooltip
+          date={game.posted_at}
+          title={game.title}
+          titleClassName="truncate font-sans text-base font-bold text-makecode-black"
+        />
         <p className="font-sans text-sm text-makecode-brown">{game.author_username || "Anonymous"}</p>
-        <div className="mt-2 flex flex-col gap-1">
-          <div className="flex items-center justify-between gap-2">
-            <PostedAt date={game.posted_at} />
-            <div className="flex items-center gap-2">
-              <LikeControl game={game} />
-              <PlayControl game={game} />
-            </div>
+        <div className="mt-2 flex flex-col items-end gap-1">
+          <div className="flex items-center gap-2">
+            <LikeControl game={game} />
+            <PlayControl game={game} />
           </div>
           {game.forum_url ? (
             <a

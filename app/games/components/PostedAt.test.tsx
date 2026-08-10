@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { PostedAt, formatPostedAt } from "./PostedAt";
+import { PostedAtTooltip, formatPostedAt, postedAtLabel } from "./PostedAt";
 
 describe("formatPostedAt", () => {
   it("formats an ISO date as mm/dd/yyyy using UTC", () => {
@@ -24,26 +24,113 @@ describe("formatPostedAt", () => {
   });
 });
 
-describe("PostedAt", () => {
-  it("renders the formatted date in a <time> element", () => {
-    render(<PostedAt date="2026-08-09T13:24:00.000Z" />);
-    const el = screen.getByText("08/09/2026");
-    expect(el.tagName).toBe("TIME");
-    expect(el.getAttribute("datetime")).toBe("2026-08-09T13:24:00.000Z");
+describe("postedAtLabel", () => {
+  it("builds an 'Originally posted' label from a date", () => {
+    expect(postedAtLabel("2026-08-09T13:24:00.000Z")).toBe(
+      "Originally posted 08/09/2026",
+    );
   });
 
-  it("exposes an accessible label", () => {
-    render(<PostedAt date="2026-08-09T13:24:00.000Z" />);
-    expect(screen.getByLabelText("Posted 08/09/2026")).not.toBeNull();
+  it("returns null when the date is null", () => {
+    expect(postedAtLabel(null)).toBeNull();
   });
 
-  it("renders nothing when the date is null", () => {
-    const { container } = render(<PostedAt date={null} />);
-    expect(container.querySelector("time")).toBeNull();
+  it("returns null for an unparseable date", () => {
+    expect(postedAtLabel("not-a-date")).toBeNull();
+  });
+});
+
+describe("PostedAtTooltip", () => {
+  it("renders the title in an h3 with the provided className", () => {
+    render(
+      <PostedAtTooltip
+        date="2026-08-09T13:24:00.000Z"
+        title="My Game"
+        titleClassName="truncate font-sans text-base font-bold"
+      />,
+    );
+    const heading = screen.getByRole("heading", { name: "My Game" });
+    expect(heading.tagName).toBe("H3");
+    expect(heading.className).toBe(
+      "truncate font-sans text-base font-bold",
+    );
   });
 
-  it("renders nothing for an unparseable date", () => {
-    const { container } = render(<PostedAt date="not-a-date" />);
-    expect(container.querySelector("time")).toBeNull();
+  it("renders a tooltip with the 'Originally posted' label", () => {
+    render(
+      <PostedAtTooltip
+        date="2026-08-09T13:24:00.000Z"
+        title="My Game"
+        titleClassName="truncate"
+      />,
+    );
+    const tooltip = screen.getByRole("tooltip");
+    expect(tooltip.textContent).toBe("Originally posted 08/09/2026");
+  });
+
+  it("links the heading to the tooltip via aria-describedby", () => {
+    render(
+      <PostedAtTooltip
+        date="2026-08-09T13:24:00.000Z"
+        title="My Game"
+        titleClassName="truncate"
+      />,
+    );
+    const heading = screen.getByRole("heading", { name: "My Game" });
+    const tooltip = screen.getByRole("tooltip");
+    expect(heading.getAttribute("aria-describedby")).toBe(tooltip.id);
+    expect(tooltip.getAttribute("role")).toBe("tooltip");
+  });
+
+  it("hides the tooltip by default and shows it on hover/focus classes", () => {
+    render(
+      <PostedAtTooltip
+        date="2026-08-09T13:24:00.000Z"
+        title="My Game"
+        titleClassName="truncate"
+      />,
+    );
+    const tooltip = screen.getByRole("tooltip");
+    expect(tooltip.className).toContain("opacity-0");
+    expect(tooltip.className).toContain("group-hover:opacity-100");
+    expect(tooltip.className).toContain("group-focus-within:opacity-100");
+  });
+
+  it("makes the heading focusable when a tooltip is present", () => {
+    render(
+      <PostedAtTooltip
+        date="2026-08-09T13:24:00.000Z"
+        title="My Game"
+        titleClassName="truncate"
+      />,
+    );
+    expect(screen.getByRole("heading", { name: "My Game" }).getAttribute("tabindex")).toBe("0");
+  });
+
+  it("renders only the heading (no tooltip) when the date is null", () => {
+    render(
+      <PostedAtTooltip date={null} title="My Game" titleClassName="truncate" />,
+    );
+    expect(screen.getByRole("heading", { name: "My Game" })).not.toBeNull();
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("renders only the heading (no tooltip) for an unparseable date", () => {
+    render(
+      <PostedAtTooltip
+        date="not-a-date"
+        title="My Game"
+        titleClassName="truncate"
+      />,
+    );
+    expect(screen.getByRole("heading", { name: "My Game" })).not.toBeNull();
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("does not make the heading focusable when there is no tooltip", () => {
+    render(
+      <PostedAtTooltip date={null} title="My Game" titleClassName="truncate" />,
+    );
+    expect(screen.getByRole("heading", { name: "My Game" }).getAttribute("tabindex")).toBeNull();
   });
 });
