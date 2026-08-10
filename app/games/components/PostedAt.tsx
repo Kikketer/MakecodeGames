@@ -14,7 +14,7 @@ export function PostedAt({ date }: { date: string | null }) {
   return (
     <time
       dateTime={date ?? undefined}
-      className="font-sans text-xs font-bold text-makecode-brown"
+      className="font-sans text-xs text-gray-500"
       aria-label={`Posted ${formatted}`}
     >
       {formatted}
