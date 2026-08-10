@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
-import { refreshGameReactions, ingestPost, ingestCategoryTopics, ingestJamTopic, ingestOnce, listActiveCategoryTopics, listActiveJamTopics, listAllJamTopics } from "./ingest-games";
+import { refreshGameReactions, ingestPost, ingestCategoryTopics, ingestJamTopic, ingestOnce, listActiveCategoryTopics, listActiveJamTopics, listAllJamTopics, fetchThreadTailPosts, backfillAll } from "./ingest-games";
 
 const mockSupabase = vi.hoisted(() => ({ from: vi.fn(), rpc: vi.fn() }));
 
@@ -197,6 +197,9 @@ describe("ingestCategoryTopics", () => {
         upsert: () => { calls.push("upsert"); return chain; },
         update: () => { calls.push("update"); return chain; },
         then: (resolve: (value: unknown) => void) => {
+          if (table === "ingested_topics" && calls.includes("select") && calls.includes("single")) {
+            return resolve({ data: { last_seen_post_id: 4 }, error: null });
+          }
           if (table === "game_forum_posts" && calls.includes("select") && calls.includes("eq") && !calls.includes("limit")) {
             return resolve({ data: [1, 2, 3, 4, 5].map((id) => ({ forum_post_id: id })), error: null });
           }
@@ -282,7 +285,7 @@ describe("ingestCategoryTopics", () => {
       .mockResolvedValueOnce(page1)
       // walks backward from the last page: page 3 has the new post...
       .mockResolvedValueOnce(page3)
-      // ...page 2 is fully known, so the walk stops there — page 1 is never re-fetched.
+      // ...page 2 has post 3 (id <= lastSeenPostId 4), so the walk stops there — page 1 is never re-fetched.
       .mockResolvedValueOnce(page2)
       .mockResolvedValueOnce(jsonResponse({ kind: "script", id: "abc-123", name: "Test Game" }))
       // posts 1 and 2 (on the skipped page 1) still get poked individually for fresh reactions.
@@ -463,6 +466,9 @@ describe("ingestJamTopic", () => {
         upsert: () => { calls.push("upsert"); return chain; },
         update: () => { calls.push("update"); return chain; },
         then: (resolve: (value: unknown) => void) => {
+          if (table === "ingested_topics" && calls.includes("select") && calls.includes("single")) {
+            return resolve({ data: { last_seen_post_id: 4 }, error: null });
+          }
           if (table === "game_forum_posts" && calls.includes("select") && calls.includes("eq") && !calls.includes("limit")) {
             return resolve({ data: [2, 3, 4, 5].map((id) => ({ forum_post_id: id })), error: null });
           }
@@ -521,7 +527,7 @@ describe("ingestJamTopic", () => {
       .mockResolvedValueOnce(page1)
       // walks backward from the last page: page 3 has the new post...
       .mockResolvedValueOnce(page3)
-      // ...page 2 is fully known, so the walk stops there — page 1 is never re-fetched.
+      // ...page 2 has post 3 (id <= lastSeenPostId 4), so the walk stops there — page 1 is never re-fetched.
       .mockResolvedValueOnce(page2)
       .mockResolvedValueOnce(jsonResponse({ kind: "script", id: "abc-777", name: "Jam Game" }))
       // post 2 (on the skipped page 1) still gets poked individually for fresh reactions.
@@ -1243,6 +1249,9 @@ describe("ingestCategoryTopics link click handling", () => {
         upsert: (data: unknown) => { calls.push("upsert"); upsertCalls.push({ table, data }); return chain; },
         update: (data: unknown) => { calls.push("update"); updateCalls.push({ table, data }); return chain; },
         then: (resolve: (value: unknown) => void) => {
+          if (table === "ingested_topics" && calls.includes("select") && calls.includes("single")) {
+            return resolve({ data: { last_seen_post_id: 4 }, error: null });
+          }
           if (table === "game_forum_posts" && calls.includes("select") && calls.includes("eq") && !calls.includes("limit")) {
             return resolve({ data: [1, 2, 3, 4, 5].map((id) => ({ forum_post_id: id })), error: null });
           }
@@ -1356,5 +1365,466 @@ describe("ingestCategoryTopics link click handling", () => {
     expect(forumUpdates).toContainEqual(expect.objectContaining({ link_clicks: 40, reaction_count: 4 }));
     expect(forumUpdates).toContainEqual(expect.objectContaining({ link_clicks: 10, reaction_count: 11 }));
     expect(forumUpdates).toContainEqual(expect.objectContaining({ link_clicks: 0, reaction_count: 12 }));
+  });
+});
+
+describe("fetchThreadTailPosts", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFetch = vi.fn();
+    vi.stubGlobal("fetch", mockFetch);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function makePage(pageNum: number, postIds: number[], postsCount: number) {
+    return jsonResponse({
+      id: 600,
+      title: "Test topic",
+      category_id: 5,
+      posts_count: postsCount,
+      views: 100,
+      post_stream: {
+        posts: postIds.map((id, i) => ({
+          id,
+          post_number: (pageNum - 1) * 2 + i + 1,
+          cooked: "<p>post</p>",
+          user_id: 1,
+          username: "player",
+          created_at: "2026-08-01T00:00:00.000Z",
+          reaction_users_count: 0,
+        })),
+      },
+    });
+  }
+
+  it("stops at the first page containing a post with id <= lastSeenPostId (boundary page still processed)", async () => {
+    // 4 pages, 2 posts per page (posts 1-8). lastSeenPostId = 5.
+    // Page 4 (posts 7, 8): no post <= 5. Continue.
+    // Page 3 (posts 5, 6): post 5 <= 5. Stop after processing.
+    // Pages 2 and 1 (in loop) not fetched.
+    const page1 = makePage(1, [1, 2], 8);
+    const page3 = makePage(3, [5, 6], 8);
+    const page4 = makePage(4, [7, 8], 8);
+
+    mockFetch
+      .mockResolvedValueOnce(page1)
+      .mockResolvedValueOnce(page4)
+      .mockResolvedValueOnce(page3);
+
+    const { posts, crawledIds } = await fetchThreadTailPosts(600, 5);
+
+    // Boundary page (page 3) was processed — posts 5 and 6 are included
+    expect(posts.map((p) => p.id)).toEqual([7, 8, 5, 6]);
+    expect([...crawledIds]).toEqual([7, 8, 5, 6]);
+
+    const fetchUrls = mockFetch.mock.calls.map((c) => String(c[0]));
+    expect(fetchUrls).toEqual([
+      "https://forum.makecode.com/t/600.json",
+      "https://forum.makecode.com/t/600.json?page=4",
+      "https://forum.makecode.com/t/600.json?page=3",
+    ]);
+    expect(fetchUrls).not.toContain("https://forum.makecode.com/t/600.json?page=2");
+    expect(fetchUrls).not.toContain("https://forum.makecode.com/t/600.json?page=1");
+  });
+
+  it("crawls all pages when lastSeenPostId = 0 (first crawl, no early stop)", async () => {
+    // 4 pages, 2 posts per page (posts 1-8). lastSeenPostId = 0.
+    // No stop condition fires — all pages crawled.
+    const page1 = makePage(1, [1, 2], 8);
+    const page2 = makePage(2, [3, 4], 8);
+    const page3 = makePage(3, [5, 6], 8);
+    const page4 = makePage(4, [7, 8], 8);
+
+    mockFetch
+      .mockResolvedValueOnce(page1)
+      .mockResolvedValueOnce(page4)
+      .mockResolvedValueOnce(page3)
+      .mockResolvedValueOnce(page2);
+
+    const { posts, crawledIds } = await fetchThreadTailPosts(600, 0);
+
+    expect(posts.map((p) => p.id)).toEqual([7, 8, 5, 6, 3, 4, 1, 2]);
+    expect(crawledIds.size).toBe(8);
+
+    const fetchUrls = mockFetch.mock.calls.map((c) => String(c[0]));
+    expect(fetchUrls).toEqual([
+      "https://forum.makecode.com/t/600.json",
+      "https://forum.makecode.com/t/600.json?page=4",
+      "https://forum.makecode.com/t/600.json?page=3",
+      "https://forum.makecode.com/t/600.json?page=2",
+    ]);
+    // Page 1 is fetched as the initial page, not re-fetched in the loop
+    expect(fetchUrls).not.toContain("https://forum.makecode.com/t/600.json?page=1");
+  });
+
+  it("crawls all pages without cap when maxPages = Infinity", async () => {
+    // 12 pages, 1 post per page. lastSeenPostId = 0, maxPages = Infinity.
+    // No stop, no cap — all 12 pages crawled.
+    function makeSinglePostPage(pageNum: number, postId: number) {
+      return jsonResponse({
+        id: 700,
+        title: "Big topic",
+        category_id: 5,
+        posts_count: 12,
+        views: 100,
+        post_stream: {
+          posts: [
+            { id: postId, post_number: pageNum, cooked: "<p>post</p>", user_id: 1, username: "player", created_at: "2026-08-01T00:00:00.000Z", reaction_users_count: 0 },
+          ],
+        },
+      });
+    }
+
+    const pages: Record<number, ReturnType<typeof makeSinglePostPage>> = {};
+    for (let i = 1; i <= 12; i++) {
+      pages[i] = makeSinglePostPage(i, i);
+    }
+
+    mockFetch.mockResolvedValueOnce(pages[1]);
+    for (let p = 12; p >= 2; p--) {
+      mockFetch.mockResolvedValueOnce(pages[p]);
+    }
+
+    const { posts, crawledIds } = await fetchThreadTailPosts(700, 0, undefined, Infinity);
+
+    expect(posts).toHaveLength(12);
+    expect(crawledIds.size).toBe(12);
+
+    const fetchUrls = mockFetch.mock.calls.map((c) => String(c[0]));
+    // initial fetch + 11 page fetches (page 1 is reused from initial, not re-fetched)
+    expect(fetchUrls).toHaveLength(12);
+    expect(fetchUrls).not.toContain("https://forum.makecode.com/t/700.json?page=1");
+  });
+});
+
+describe("ingestTopic last_seen_post_id tracking", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-08-04T12:00:00.000Z");
+    mockFetch = vi.fn();
+    vi.stubGlobal("fetch", mockFetch);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("upserts last_seen_post_id to the max crawled post id after crawl", async () => {
+    const upsertCalls: { table: string; data: unknown }[] = [];
+    const noopSleep = (): Promise<void> => Promise.resolve();
+
+    mockSupabase.from = vi.fn((table: string) => {
+      const calls: string[] = [];
+      const chain = {
+        select: () => { calls.push("select"); return chain; },
+        eq: () => { calls.push("eq"); return chain; },
+        limit: () => { calls.push("limit"); return chain; },
+        single: () => { calls.push("single"); return chain; },
+        insert: () => { calls.push("insert"); return chain; },
+        upsert: (data: unknown) => { calls.push("upsert"); upsertCalls.push({ table, data }); return chain; },
+        update: () => { calls.push("update"); return chain; },
+        then: (resolve: (value: unknown) => void) => {
+          if (table === "ingested_topics" && calls.includes("select") && calls.includes("single")) {
+            return resolve({ data: { last_seen_post_id: 0 }, error: null });
+          }
+          if (table === "game_forum_posts" && calls.includes("select") && calls.includes("eq") && !calls.includes("limit")) {
+            return resolve({ data: [], error: null });
+          }
+          if (table === "game_jams" && calls.includes("upsert") && calls.includes("single")) {
+            return resolve({ data: { id: "jam-1" }, error: null });
+          }
+          if (calls.includes("upsert") || calls.includes("update")) return resolve({ error: null });
+          if (calls.includes("insert") && calls.includes("single")) return resolve({ data: { id: "game-1" }, error: null });
+          if (calls.includes("select") && calls.includes("limit")) return resolve({ data: [] });
+          return resolve({ data: null, error: null });
+        },
+      };
+      return chain;
+    });
+
+    // Jam topic with 2 pages, 2 posts per page. First crawl (lastSeenPostId = 0).
+    const page1 = jsonResponse({
+      id: 44801,
+      title: "Jam #42",
+      category_id: 13,
+      posts_count: 4,
+      views: 100,
+      post_stream: {
+        posts: [
+          { id: 1, post_number: 1, cooked: "<p>Welcome</p>", user_id: 1, username: "host", created_at: "2026-08-01T00:00:00.000Z", reaction_users_count: 0 },
+          { id: 2, post_number: 2, cooked: '<p><a href="https://arcade.makecode.com/11111">game</a></p>', user_id: 2, username: "player", created_at: "2026-08-01T10:00:00.000Z", reaction_users_count: 0 },
+        ],
+      },
+    });
+    const page2 = jsonResponse({
+      id: 44801,
+      title: "Jam #42",
+      category_id: 13,
+      posts_count: 4,
+      views: 100,
+      post_stream: {
+        posts: [
+          { id: 3, post_number: 3, cooked: "<p>chat</p>", user_id: 3, username: "player3", created_at: "2026-08-02T10:00:00.000Z", reaction_users_count: 0 },
+          { id: 4, post_number: 4, cooked: '<p><a href="https://arcade.makecode.com/22222">game</a></p>', user_id: 4, username: "player4", created_at: "2026-08-03T10:00:00.000Z", reaction_users_count: 0 },
+        ],
+      },
+    });
+
+    mockFetch
+      .mockResolvedValueOnce(jsonResponse({ categories: [{ id: 13, name: "Jams", slug: "jams" }] }))
+      .mockResolvedValueOnce(page1)
+      .mockResolvedValueOnce(page2)
+      .mockResolvedValueOnce(jsonResponse({ kind: "script", id: "11111", name: "Game 1" }))
+      .mockResolvedValueOnce(jsonResponse({ kind: "script", id: "22222", name: "Game 2" }));
+
+    await ingestJamTopic(44801, undefined, 100, noopSleep);
+
+    const ingestedTopicsUpserts = upsertCalls.filter((c) => c.table === "ingested_topics");
+    expect(ingestedTopicsUpserts).toHaveLength(1);
+    expect(ingestedTopicsUpserts[0].data).toMatchObject({
+      forum_topic_id: 44801,
+      last_seen_post_id: 4, // max of crawled post ids {1, 2, 3, 4}
+    });
+  });
+});
+
+describe("jam_id association for known posts", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-08-04T12:00:00.000Z");
+    mockFetch = vi.fn();
+    vi.stubGlobal("fetch", mockFetch);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("sets jam_id on known game posts during jam ingest (backfill scenario)", async () => {
+    const updateCalls: { table: string; data: unknown }[] = [];
+    const noopSleep = (): Promise<void> => Promise.resolve();
+
+    mockSupabase.from = vi.fn((table: string) => {
+      const calls: string[] = [];
+      const chain = {
+        select: () => { calls.push("select"); return chain; },
+        eq: () => { calls.push("eq"); return chain; },
+        limit: () => { calls.push("limit"); return chain; },
+        single: () => { calls.push("single"); return chain; },
+        insert: () => { calls.push("insert"); return chain; },
+        upsert: () => { calls.push("upsert"); return chain; },
+        update: (data: unknown) => { calls.push("update"); updateCalls.push({ table, data }); return chain; },
+        then: (resolve: (value: unknown) => void) => {
+          if (table === "ingested_topics" && calls.includes("select") && calls.includes("single")) {
+            return resolve({ data: { last_seen_post_id: 0 }, error: null });
+          }
+          if (table === "game_forum_posts" && calls.includes("select") && calls.includes("eq") && !calls.includes("limit")) {
+            // Post 2 is already known (ingested as a category-5 post without jam_id)
+            return resolve({ data: [{ forum_post_id: 2 }], error: null });
+          }
+          if (table === "game_jams" && calls.includes("upsert") && calls.includes("single")) {
+            return resolve({ data: { id: "jam-37" }, error: null });
+          }
+          if (calls.includes("upsert") || calls.includes("update")) return resolve({ error: null });
+          if (calls.includes("insert") && calls.includes("single")) return resolve({ data: { id: "game-new" }, error: null });
+          if (calls.includes("select") && calls.includes("limit")) return resolve({ data: [] });
+          return resolve({ data: null, error: null });
+        },
+      };
+      return chain;
+    });
+
+    // Jam topic with 1 page, 2 posts. Post 1 = first post (skipped).
+    // Post 2 = known game post with share URL (previously ingested as category-5).
+    const page1 = jsonResponse({
+      id: 45257,
+      title: "Announcement: Mini Game Jam #37 - Corporation Jam!",
+      category_id: 5,
+      posts_count: 2,
+      views: 500,
+      post_stream: {
+        posts: [
+          { id: 1, post_number: 1, cooked: "<p>Welcome to Jam #37</p>", user_id: 1, username: "host", created_at: "2026-08-04T00:00:00.000Z", reaction_users_count: 10 },
+          { id: 2, post_number: 2, cooked: '<p><a href="https://arcade.makecode.com/12345">game</a></p>', user_id: 2, username: "player", created_at: "2026-08-04T09:00:00.000Z", reaction_users_count: 5 },
+        ],
+      },
+    });
+
+    mockFetch
+      .mockResolvedValueOnce(jsonResponse({ categories: [{ id: 5, name: "Games", slug: "games" }] }))
+      .mockResolvedValueOnce(page1);
+
+    await ingestJamTopic(45257, undefined, 100, noopSleep);
+
+    // refreshKnownPostMetadata should have been called with jam_id for the known game post
+    const forumUpdates = updateCalls
+      .filter((c) => c.table === "game_forum_posts")
+      .map((c) => c.data as { jam_id?: string; reaction_count: number });
+    expect(forumUpdates).toHaveLength(1);
+    expect(forumUpdates[0].jam_id).toBe("jam-37");
+  });
+
+  it("does not set jam_id on known chat posts (no share URLs)", async () => {
+    const updateCalls: { table: string; data: unknown }[] = [];
+    const noopSleep = (): Promise<void> => Promise.resolve();
+
+    mockSupabase.from = vi.fn((table: string) => {
+      const calls: string[] = [];
+      const chain = {
+        select: () => { calls.push("select"); return chain; },
+        eq: () => { calls.push("eq"); return chain; },
+        limit: () => { calls.push("limit"); return chain; },
+        single: () => { calls.push("single"); return chain; },
+        insert: () => { calls.push("insert"); return chain; },
+        upsert: () => { calls.push("upsert"); return chain; },
+        update: (data: unknown) => { calls.push("update"); updateCalls.push({ table, data }); return chain; },
+        then: (resolve: (value: unknown) => void) => {
+          if (table === "ingested_topics" && calls.includes("select") && calls.includes("single")) {
+            return resolve({ data: { last_seen_post_id: 0 }, error: null });
+          }
+          if (table === "game_forum_posts" && calls.includes("select") && calls.includes("eq") && !calls.includes("limit")) {
+            // Post 2 is known but has no share URL (chat post)
+            return resolve({ data: [{ forum_post_id: 2 }], error: null });
+          }
+          if (table === "game_jams" && calls.includes("upsert") && calls.includes("single")) {
+            return resolve({ data: { id: "jam-37" }, error: null });
+          }
+          if (calls.includes("upsert") || calls.includes("update")) return resolve({ error: null });
+          if (calls.includes("insert") && calls.includes("single")) return resolve({ data: { id: "game-new" }, error: null });
+          if (calls.includes("select") && calls.includes("limit")) return resolve({ data: [] });
+          return resolve({ data: null, error: null });
+        },
+      };
+      return chain;
+    });
+
+    const page1 = jsonResponse({
+      id: 45257,
+      title: "Announcement: Mini Game Jam #37 - Corporation Jam!",
+      category_id: 5,
+      posts_count: 2,
+      views: 500,
+      post_stream: {
+        posts: [
+          { id: 1, post_number: 1, cooked: "<p>Welcome to Jam #37</p>", user_id: 1, username: "host", created_at: "2026-08-04T00:00:00.000Z", reaction_users_count: 10 },
+          { id: 2, post_number: 2, cooked: "<p>just chatting</p>", user_id: 2, username: "player", created_at: "2026-08-04T09:00:00.000Z", reaction_users_count: 5 },
+        ],
+      },
+    });
+
+    mockFetch
+      .mockResolvedValueOnce(jsonResponse({ categories: [{ id: 5, name: "Games", slug: "games" }] }))
+      .mockResolvedValueOnce(page1);
+
+    await ingestJamTopic(45257, undefined, 100, noopSleep);
+
+    const forumUpdates = updateCalls
+      .filter((c) => c.table === "game_forum_posts")
+      .map((c) => c.data as { jam_id?: string });
+    expect(forumUpdates).toHaveLength(1);
+    expect(forumUpdates[0].jam_id).toBeUndefined();
+  });
+});
+
+describe("backfillAll jamsOnly", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-08-04T12:00:00.000Z");
+    mockFetch = vi.fn();
+    vi.stubGlobal("fetch", mockFetch);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("skips category 5 backfill when jamsOnly is true", async () => {
+    mockSupabase.from = vi.fn((table: string) => {
+      const calls: string[] = [];
+      const chain = {
+        select: () => { calls.push("select"); return chain; },
+        eq: () => { calls.push("eq"); return chain; },
+        limit: () => { calls.push("limit"); return chain; },
+        single: () => { calls.push("single"); return chain; },
+        insert: () => { calls.push("insert"); return chain; },
+        upsert: () => { calls.push("upsert"); return chain; },
+        update: () => { calls.push("update"); return chain; },
+        then: (resolve: (value: unknown) => void) => {
+          if (table === "ingested_topics" && calls.includes("select") && calls.includes("single")) {
+            return resolve({ data: { last_seen_post_id: 0 }, error: null });
+          }
+          if (table === "game_forum_posts" && calls.includes("select") && calls.includes("eq") && !calls.includes("limit")) {
+            return resolve({ data: [], error: null });
+          }
+          if (table === "game_jams" && calls.includes("upsert") && calls.includes("single")) {
+            return resolve({ data: { id: "jam-1" }, error: null });
+          }
+          if (calls.includes("upsert") || calls.includes("update")) return resolve({ error: null });
+          if (calls.includes("insert") && calls.includes("single")) return resolve({ data: { id: "game-1" }, error: null });
+          if (calls.includes("select") && calls.includes("limit")) return resolve({ data: [] });
+          if (table === "game_forum_posts" && calls.includes("select")) {
+            return resolve({ data: [], count: 0, error: null });
+          }
+          return resolve({ data: null, error: null });
+        },
+      };
+      return chain;
+    });
+
+    // 1 jam topic with 1 page (1 post, the first post which is skipped)
+    const topicPage = jsonResponse({
+      id: 45257,
+      title: "Announcement: Mini Game Jam #37 - Corporation Jam!",
+      category_id: 5,
+      posts_count: 1,
+      views: 100,
+      post_stream: {
+        posts: [
+          { id: 1, post_number: 1, cooked: "<p>Welcome</p>", user_id: 1, username: "host", created_at: "2026-08-04T00:00:00.000Z", reaction_users_count: 0 },
+        ],
+      },
+    });
+
+    mockFetch
+      .mockResolvedValueOnce(
+        jsonResponse({
+          topic_list: {
+            topics: [
+              {
+                id: 45257,
+                title: "Announcement: Mini Game Jam #37 - Corporation Jam!",
+                posts_count: 1,
+                bumped_at: "2026-08-01T00:00:00.000Z",
+                category_id: 5,
+                views: 100,
+                created_at: "2026-08-04T00:00:00.000Z",
+              },
+            ],
+          },
+        })
+      )
+      // backfillJamTopic → getCategories
+      .mockResolvedValueOnce(jsonResponse({ categories: [{ id: 5, name: "Games", slug: "games" }] }))
+      // backfillJamTopic → fetchTopicPageStep
+      .mockResolvedValueOnce(topicPage)
+      // backfillTopic → fetchAllTopicPosts → fetchTopicPageStep (fetches page 1 again)
+      .mockResolvedValueOnce(topicPage);
+
+    const result = await backfillAll({ jamsOnly: true });
+
+    expect(result.jams).toBe(1);
+
+    // Verify no category 5 listing was fetched
+    const fetchUrls = mockFetch.mock.calls.map((c) => String(c[0]));
+    expect(fetchUrls.some((url) => url.includes("/c/5"))).toBe(false);
   });
 });
