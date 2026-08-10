@@ -2,7 +2,7 @@
 
 import { useId, useRef, useState } from "react";
 
-const TOOLTIP_SHOW_DELAY_MS = 3000;
+const TOOLTIP_SHOW_DELAY_MS = 1000;
 
 export function formatPostedAt(date: string | null): string | null {
   if (!date) return null;
