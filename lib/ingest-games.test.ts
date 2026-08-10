@@ -1906,6 +1906,7 @@ describe("backfillPostedAt", () => {
         select: () => { calls.push("select"); return chain; },
         is: () => { calls.push("is"); return chain; },
         eq: () => { calls.push("eq"); return chain; },
+        range: () => { calls.push("range"); return chain; },
         update: (values: unknown) => {
           calls.push("update");
           updateValues.push(values);
@@ -1961,6 +1962,7 @@ describe("backfillPostedAt", () => {
         select: () => { calls.push("select"); return chain; },
         is: () => { calls.push("is"); return chain; },
         eq: () => { calls.push("eq"); return chain; },
+        range: () => { calls.push("range"); return chain; },
         update: () => { calls.push("update"); return chain; },
         then: (resolve: (value: unknown) => void) => {
           if (table === "game_forum_posts" && calls.includes("select") && calls.includes("is")) {
@@ -1987,5 +1989,68 @@ describe("backfillPostedAt", () => {
 
     expect(result.updated).toBe(0);
     expect(result.skipped).toBe(2);
+  });
+
+  it("paginates the select to backfill more than one page of rows", async () => {
+    // Regression: PostgREST caps a bare `.select()` at 1000 rows, so a
+    // single-page backfill silently dropped everything past row 1000. Use a
+    // tiny pageSize so we can exercise the multi-page path without mocking
+    // 1000+ fetches.
+    const updateValues: unknown[] = [];
+    const selectCalls: number[] = [];
+
+    mockSupabase.from = vi.fn((table: string) => {
+      const calls: string[] = [];
+      let rangeFrom = 0;
+      const chain = {
+        select: () => { calls.push("select"); return chain; },
+        is: () => { calls.push("is"); return chain; },
+        eq: () => { calls.push("eq"); return chain; },
+        range: (from: number) => { calls.push("range"); rangeFrom = from; return chain; },
+        update: (values: unknown) => {
+          calls.push("update");
+          updateValues.push(values);
+          return chain;
+        },
+        then: (resolve: (value: unknown) => void) => {
+          if (table === "game_forum_posts" && calls.includes("select") && calls.includes("is") && calls.includes("range")) {
+            selectCalls.push(rangeFrom);
+            // Page size 2: first page (from=0) returns 2 rows (full page),
+            // second page (from=2) returns 1 row (partial page -> stop).
+            const page = rangeFrom === 0
+              ? [{ forum_post_id: 100 }, { forum_post_id: 200 }]
+              : [{ forum_post_id: 300 }];
+            return resolve({ data: page, error: null });
+          }
+          if (calls.includes("update")) return resolve({ error: null });
+          return resolve({ data: null, error: null });
+        },
+      };
+      return chain;
+    });
+
+    mockSupabase.rpc = vi.fn(() => Promise.resolve({ error: null }));
+
+    mockFetch
+      .mockResolvedValueOnce(jsonResponse({ id: 100, created_at: "2026-06-01T10:00:00.000Z" }))
+      .mockResolvedValueOnce(jsonResponse({ id: 200, created_at: "2026-07-15T14:00:00.000Z" }))
+      .mockResolvedValueOnce(jsonResponse({ id: 300, created_at: "2026-08-01T09:00:00.000Z" }));
+
+    const result = await backfillPostedAt({ delayMs: 0, pageSize: 2, sleepFn: vi.fn() });
+
+    // Two select pages were fetched (from=0 and from=2).
+    expect(selectCalls).toEqual([0, 2]);
+    expect(result.updated).toBe(3);
+    expect(result.errors).toEqual([]);
+
+    const postedAtValues = updateValues.map((v) => (v as { posted_at: string }).posted_at);
+    expect(postedAtValues).toEqual(
+      expect.arrayContaining([
+        "2026-06-01T10:00:00.000Z",
+        "2026-07-15T14:00:00.000Z",
+        "2026-08-01T09:00:00.000Z",
+      ])
+    );
+    expect(postedAtValues).toHaveLength(3);
   });
 });

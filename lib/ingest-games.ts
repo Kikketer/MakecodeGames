@@ -435,6 +435,7 @@ export async function backfillPostedAt(
   options: {
     includeExisting?: boolean;
     delayMs?: number;
+    pageSize?: number;
     sleepFn?: (ms: number) => Promise<void>;
     onProgress?: (message: string) => void;
   } = {}
@@ -444,14 +445,29 @@ export async function backfillPostedAt(
   const sleepFn = options.sleepFn ?? sleep;
   const log = options.onProgress || (() => {});
 
-  let query = supabaseServer.from("game_forum_posts").select("forum_post_id");
-  if (!includeExisting) {
-    query = query.is("posted_at", null);
+  // PostgREST caps `.select()` at 1000 rows by default, so we paginate
+  // with `.range()` to make sure every qualifying row is backfilled. Without
+  // this, a single select silently drops rows past 1000 and the backfill
+  // reports a suspiciously round "1000 updated" while leaving the rest NULL.
+  const PAGE_SIZE = options.pageSize ?? 1000;
+  const postIds: number[] = [];
+  let from = 0;
+  while (true) {
+    let query = supabaseServer
+      .from("game_forum_posts")
+      .select("forum_post_id")
+      .range(from, from + PAGE_SIZE - 1);
+    if (!includeExisting) {
+      query = query.is("posted_at", null);
+    }
+    const { data, error } = await query;
+    if (error) throw error;
+    const page = ((data || []) as { forum_post_id: number }[]).map((r) => r.forum_post_id);
+    postIds.push(...page);
+    if (page.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
   }
-  const { data, error } = await query;
-  if (error) throw error;
 
-  const postIds = ((data || []) as { forum_post_id: number }[]).map((r) => r.forum_post_id);
   log(`Backfilling posted_at for ${postIds.length} posts...`);
 
   let updated = 0;
