@@ -6,6 +6,7 @@ import { GameWithStats } from "@/app/games/actions";
 import { recordClick } from "@/app/games/actions";
 import { LikeControl } from "./LikeControl";
 import { PlayControl } from "./PlayControl";
+import { PostedAt } from "./PostedAt";
 
 export function GameCard({ game }: { game: GameWithStats }) {
   const [failed, setFailed] = useState(false);
@@ -38,10 +39,13 @@ export function GameCard({ game }: { game: GameWithStats }) {
           {game.title}
         </h3>
         <p className="font-sans text-sm text-makecode-brown">{game.author_username || "Anonymous"}</p>
-        <div className="mt-2 flex flex-col items-end gap-1">
-          <div className="flex items-center gap-2">
-            <LikeControl game={game} />
-            <PlayControl game={game} />
+        <div className="mt-2 flex flex-col gap-1">
+          <div className="flex items-center justify-between gap-2">
+            <PostedAt date={game.posted_at} />
+            <div className="flex items-center gap-2">
+              <LikeControl game={game} />
+              <PlayControl game={game} />
+            </div>
           </div>
           {game.forum_url ? (
             <a
@@ -50,12 +54,12 @@ export function GameCard({ game }: { game: GameWithStats }) {
               rel="noopener noreferrer"
               aria-label={`Visit the forum post for ${game.title}`}
               title={game.forum_topic_title || `Visit the forum post for ${game.title}`}
-              className="max-w-full truncate text-right font-sans text-sm font-bold text-makecode-blue hover:underline"
+              className="max-w-full self-end truncate text-right font-sans text-sm font-bold text-makecode-blue hover:underline"
             >
               {game.forum_topic_title || "Forum"}
             </a>
           ) : (
-            <span className="font-sans text-sm font-bold text-makecode-brown">Forum</span>
+            <span className="self-end font-sans text-sm font-bold text-makecode-brown">Forum</span>
           )}
         </div>
       </div>

@@ -6,6 +6,7 @@ import { GameWithStats } from "@/app/games/actions";
 import { recordClick } from "@/app/games/actions";
 import { LikeControl } from "./LikeControl";
 import { PlayControl } from "./PlayControl";
+import { PostedAt } from "./PostedAt";
 
 export function GameJamCard({ game }: { game: GameWithStats }) {
   const [failed, setFailed] = useState(false);
@@ -21,6 +22,7 @@ export function GameJamCard({ game }: { game: GameWithStats }) {
           <p className="font-sans text-sm text-makecode-brown">{game.author_username || "Anonymous"}</p>
         </div>
         <div className="flex items-center gap-3">
+          <PostedAt date={game.posted_at} />
           <LikeControl game={game} />
           <PlayControl game={game} />
           {game.forum_url ? (
