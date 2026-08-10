@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
-import { refreshGameReactions, ingestPost, ingestCategoryTopics, ingestJamTopic, ingestOnce, listActiveCategoryTopics, listActiveJamTopics, listAllJamTopics, fetchThreadTailPosts, backfillAll } from "./ingest-games";
+import { refreshGameReactions, ingestPost, ingestCategoryTopics, ingestJamTopic, ingestOnce, listActiveCategoryTopics, listActiveJamTopics, listAllJamTopics, fetchThreadTailPosts, backfillAll, backfillPostedAt } from "./ingest-games";
 
 const mockSupabase = vi.hoisted(() => ({ from: vi.fn(), rpc: vi.fn() }));
 
@@ -163,8 +163,62 @@ describe("ingestPost", () => {
     expect(upsertCalls[0]).toMatchObject({
       game_id: "game-1",
       reaction_count: 7,
+      posted_at: "2026-08-02T11:00:00.000Z",
       reaction_refreshed_at: "2026-08-02T12:00:00.000Z",
       last_parsed_at: "2026-08-02T12:00:00.000Z",
+    });
+  });
+
+  it("leaves posted_at null when the post has no created_at", async () => {
+    const upsertCalls: unknown[] = [];
+    const calls: string[] = [];
+
+    const chain = {
+      select: () => { calls.push("select"); return chain; },
+      eq: () => { calls.push("eq"); return chain; },
+      limit: () => { calls.push("limit"); return chain; },
+      single: () => { calls.push("single"); return chain; },
+      insert: () => { calls.push("insert"); return chain; },
+      upsert: (data: unknown) => { calls.push("upsert"); upsertCalls.push(data); return chain; },
+      then: (resolve: (value: unknown) => void) => {
+        if (calls.includes("upsert")) return resolve({ error: null });
+        if (calls.includes("insert") && calls.includes("single")) return resolve({ data: { id: "game-1" }, error: null });
+        if (calls.includes("select") && calls.includes("limit")) return resolve({ data: [] });
+        return resolve({ data: null, error: null });
+      },
+    };
+
+    mockSupabase.from = vi.fn(() => chain);
+
+    mockFetch.mockResolvedValue(
+      jsonResponse({ kind: "script", id: "abc-123", name: "Test Game" })
+    );
+
+    const post = {
+      id: 12345,
+      post_number: 2,
+      cooked: '<p><a href="https://arcade.makecode.com/12345">game</a></p>',
+      user_id: 1,
+      username: "player",
+      reaction_users_count: 7,
+    };
+
+    const topic = {
+      id: 555,
+      title: "A game topic",
+      category_id: 5,
+      posts_count: 2,
+      views: 10,
+    };
+
+    const categoryMap = new Map([[5, "Games"]]);
+
+    await ingestPost("https://arcade.makecode.com/12345", post, topic, categoryMap, "jam-1");
+
+    expect(upsertCalls).toHaveLength(1);
+    expect(upsertCalls[0]).toMatchObject({
+      game_id: "game-1",
+      posted_at: null,
     });
   });
 });
@@ -1826,5 +1880,112 @@ describe("backfillAll jamsOnly", () => {
     // Verify no category 5 listing was fetched
     const fetchUrls = mockFetch.mock.calls.map((c) => String(c[0]));
     expect(fetchUrls.some((url) => url.includes("/c/5"))).toBe(false);
+  });
+});
+
+describe("backfillPostedAt", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-08-10T12:00:00.000Z");
+    mockFetch = vi.fn();
+    vi.stubGlobal("fetch", mockFetch);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("fetches each post by id and writes posted_at from created_at", async () => {
+    const updateValues: unknown[] = [];
+
+    mockSupabase.from = vi.fn((table: string) => {
+      const calls: string[] = [];
+      const chain = {
+        select: () => { calls.push("select"); return chain; },
+        is: () => { calls.push("is"); return chain; },
+        eq: () => { calls.push("eq"); return chain; },
+        update: (values: unknown) => {
+          calls.push("update");
+          updateValues.push(values);
+          return chain;
+        },
+        then: (resolve: (value: unknown) => void) => {
+          if (table === "game_forum_posts" && calls.includes("select") && calls.includes("is")) {
+            return resolve({
+              data: [{ forum_post_id: 100 }, { forum_post_id: 200 }],
+              error: null,
+            });
+          }
+          if (calls.includes("update")) return resolve({ error: null });
+          return resolve({ data: null, error: null });
+        },
+      };
+      return chain;
+    });
+
+    mockSupabase.rpc = vi.fn(() => Promise.resolve({ error: null }));
+
+    mockFetch
+      .mockResolvedValueOnce(jsonResponse({ id: 100, created_at: "2026-06-01T10:00:00.000Z" }))
+      .mockResolvedValueOnce(jsonResponse({ id: 200, created_at: "2026-07-15T14:00:00.000Z" }));
+
+    const result = await backfillPostedAt({ delayMs: 0, sleepFn: vi.fn() });
+
+    expect(mockFetch).toHaveBeenCalledWith("https://forum.makecode.com/posts/100.json", {
+      headers: { Accept: "application/json" },
+    });
+    expect(mockFetch).toHaveBeenCalledWith("https://forum.makecode.com/posts/200.json", {
+      headers: { Accept: "application/json" },
+    });
+
+    const postedAtValues = updateValues.map((v) => (v as { posted_at: string }).posted_at);
+    expect(postedAtValues).toEqual(
+      expect.arrayContaining(["2026-06-01T10:00:00.000Z", "2026-07-15T14:00:00.000Z"])
+    );
+    expect(postedAtValues).toHaveLength(2);
+
+    expect(result.updated).toBe(2);
+    expect(result.skipped).toBe(0);
+    expect(result.errors).toEqual([]);
+
+    // Should refresh the materialized view after backfill
+    expect(mockSupabase.rpc).toHaveBeenCalledWith("refresh_game_daily_stats");
+  });
+
+  it("skips posts with no created_at and collects fetch errors", async () => {
+    mockSupabase.from = vi.fn((table: string) => {
+      const calls: string[] = [];
+      const chain = {
+        select: () => { calls.push("select"); return chain; },
+        is: () => { calls.push("is"); return chain; },
+        eq: () => { calls.push("eq"); return chain; },
+        update: () => { calls.push("update"); return chain; },
+        then: (resolve: (value: unknown) => void) => {
+          if (table === "game_forum_posts" && calls.includes("select") && calls.includes("is")) {
+            return resolve({
+              data: [{ forum_post_id: 100 }, { forum_post_id: 200 }],
+              error: null,
+            });
+          }
+          if (calls.includes("update")) return resolve({ error: null });
+          return resolve({ data: null, error: null });
+        },
+      };
+      return chain;
+    });
+
+    mockSupabase.rpc = vi.fn(() => Promise.resolve({ error: null }));
+
+    // Post 100 has no created_at (skipped); post 200 returns null (fetch fails)
+    mockFetch
+      .mockResolvedValueOnce(jsonResponse({ id: 100 }))
+      .mockResolvedValueOnce(jsonResponse(null));
+
+    const result = await backfillPostedAt({ delayMs: 0, sleepFn: vi.fn() });
+
+    expect(result.updated).toBe(0);
+    expect(result.skipped).toBe(2);
   });
 });

@@ -33,8 +33,8 @@ function makeBuilder(table: string, response: unknown) {
 const responses = {
   games: {
     data: [
-      { id: "g1", first_seen_at: "2026-08-01T00:00:00Z" },
-      { id: "g2", first_seen_at: "2026-08-02T00:00:00Z" },
+      { id: "g1", first_seen_at: "2026-08-01T00:00:00Z", posted_at: null },
+      { id: "g2", first_seen_at: "2026-08-02T00:00:00Z", posted_at: null },
     ],
   },
   game_stats: {
@@ -45,14 +45,14 @@ const responses = {
   },
   game_forum_posts: {
     data: [
-      { game_id: "g1", forum_url: "https://forum.makecode.com/t/g1", reply_count: 3, view_count: 5, post_cooked: null, reaction_count: 10, link_clicks: 4 },
-      { game_id: "g2", forum_url: "https://forum.makecode.com/t/g2", reply_count: 0, view_count: 1, post_cooked: null, reaction_count: 5, link_clicks: 1 },
+      { game_id: "g1", forum_url: "https://forum.makecode.com/t/g1", reply_count: 3, view_count: 5, post_cooked: null, reaction_count: 10, link_clicks: 4, posted_at: null },
+      { game_id: "g2", forum_url: "https://forum.makecode.com/t/g2", reply_count: 0, view_count: 1, post_cooked: null, reaction_count: 5, link_clicks: 1, posted_at: null },
     ],
   },
   game_daily_stats: {
     data: [
-      { id: "g1", first_seen_at: "2026-08-01T00:00:00Z", likes: 10, clicks: 2, link_clicks: 4, plays: 6, forum_url: "https://forum.makecode.com/t/g1", forum_topic_title: null, replies: 3, views: 5, post_cooked: null },
-      { id: "g2", first_seen_at: "2026-08-02T00:00:00Z", likes: 5, clicks: 0, link_clicks: 1, plays: 1, forum_url: "https://forum.makecode.com/t/g2", forum_topic_title: null, replies: 0, views: 1, post_cooked: null },
+      { id: "g1", first_seen_at: "2026-08-01T00:00:00Z", posted_at: null, likes: 10, clicks: 2, link_clicks: 4, plays: 6, forum_url: "https://forum.makecode.com/t/g1", forum_topic_title: null, replies: 3, views: 5, post_cooked: null },
+      { id: "g2", first_seen_at: "2026-08-02T00:00:00Z", posted_at: null, likes: 5, clicks: 0, link_clicks: 1, plays: 1, forum_url: "https://forum.makecode.com/t/g2", forum_topic_title: null, replies: 0, views: 1, post_cooked: null },
     ],
   },
   game_stats_snapshots: {
@@ -153,14 +153,111 @@ describe("listGames", () => {
     expect(result).toHaveLength(2);
     expect(result.map((g) => g.id)).toEqual(expect.arrayContaining(["g1", "g2"]));
   });
+
+  it("sorts newest by posted_at when present (fetchAll path)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-08-10T00:00:00.000Z");
+    mockSupabase.from = vi.fn((table: string) =>
+      makeBuilder(table, {
+        ...responses,
+        game_daily_stats: {
+          data: [
+            // g1 was crawled recently but posted long ago; g2 was crawled
+            // earlier but posted more recently. Newest should put g2 first.
+            { id: "g1", first_seen_at: "2026-08-09T00:00:00Z", posted_at: "2026-07-01T00:00:00Z", likes: 0, clicks: 0, link_clicks: 0, plays: 0, forum_url: "", forum_topic_title: null, replies: 0, views: 0, post_cooked: null },
+            { id: "g2", first_seen_at: "2026-08-01T00:00:00Z", posted_at: "2026-08-05T00:00:00Z", likes: 0, clicks: 0, link_clicks: 0, plays: 0, forum_url: "", forum_topic_title: null, replies: 0, views: 0, post_cooked: null },
+          ],
+        },
+      }[table])
+    );
+
+    const result = await listGames({ sort: "newest", limit: 10 });
+    vi.useRealTimers();
+
+    expect(result.map((g) => g.id)).toEqual(["g2", "g1"]);
+  });
+
+  it("falls back to first_seen_at for newest when posted_at is null", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-08-10T00:00:00.000Z");
+    mockSupabase.from = vi.fn((table: string) =>
+      makeBuilder(table, {
+        ...responses,
+        game_daily_stats: {
+          data: [
+            { id: "g1", first_seen_at: "2026-08-01T00:00:00Z", posted_at: null, likes: 0, clicks: 0, link_clicks: 0, plays: 0, forum_url: "", forum_topic_title: null, replies: 0, views: 0, post_cooked: null },
+            { id: "g2", first_seen_at: "2026-08-02T00:00:00Z", posted_at: null, likes: 0, clicks: 0, link_clicks: 0, plays: 0, forum_url: "", forum_topic_title: null, replies: 0, views: 0, post_cooked: null },
+          ],
+        },
+      }[table])
+    );
+
+    const result = await listGames({ sort: "newest", limit: 10 });
+    vi.useRealTimers();
+
+    expect(result.map((g) => g.id)).toEqual(["g2", "g1"]);
+  });
+
+  it("sorts hot by posted_at time-decay when present", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-08-10T00:00:00.000Z");
+    // Both games have identical likes+plays, so the one posted more recently
+    // (smaller age) wins under the hot formula. g1 was crawled today but
+    // posted a month ago; g2 was crawled early but posted yesterday.
+    mockSupabase.from = vi.fn((table: string) =>
+      makeBuilder(table, {
+        ...responses,
+        game_daily_stats: {
+          data: [
+            { id: "g1", first_seen_at: "2026-08-09T00:00:00Z", posted_at: "2026-07-10T00:00:00Z", likes: 10, clicks: 0, link_clicks: 0, plays: 10, forum_url: "", forum_topic_title: null, replies: 0, views: 0, post_cooked: null },
+            { id: "g2", first_seen_at: "2026-08-01T00:00:00Z", posted_at: "2026-08-09T00:00:00Z", likes: 10, clicks: 0, link_clicks: 0, plays: 10, forum_url: "", forum_topic_title: null, replies: 0, views: 0, post_cooked: null },
+          ],
+        },
+      }[table])
+    );
+
+    const result = await listGames({ sort: "hot", limit: 10 });
+    vi.useRealTimers();
+
+    expect(result.map((g) => g.id)).toEqual(["g2", "g1"]);
+  });
+
+  it("sorts newest by posted_at from game_forum_posts on the topic path", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-08-10T00:00:00.000Z");
+    mockSupabase.from = vi.fn((table: string) =>
+      makeBuilder(table, {
+        ...responses,
+        games: {
+          data: [
+            { id: "g1", first_seen_at: "2026-08-09T00:00:00Z", posted_at: null },
+            { id: "g2", first_seen_at: "2026-08-01T00:00:00Z", posted_at: null },
+          ],
+        },
+        game_forum_posts: {
+          data: [
+            // g1 posted long ago, g2 posted recently — posted_at from the
+            // posts rows should drive the order, not first_seen_at from games.
+            { game_id: "g1", forum_url: "https://forum.makecode.com/t/g1", reply_count: 0, view_count: 0, post_cooked: null, reaction_count: 0, link_clicks: 0, posted_at: "2026-07-01T00:00:00Z" },
+            { game_id: "g2", forum_url: "https://forum.makecode.com/t/g2", reply_count: 0, view_count: 0, post_cooked: null, reaction_count: 0, link_clicks: 0, posted_at: "2026-08-05T00:00:00Z" },
+          ],
+        },
+      }[table])
+    );
+
+    const result = await listGames({ topic: 123, sort: "newest", limit: 10 });
+    vi.useRealTimers();
+
+    expect(result.map((g) => g.id)).toEqual(["g2", "g1"]);
+  });
 });
 
 const searchResponses = {
   games: {
     data: [
-      { id: "g1", title: "Space Quest", first_seen_at: "2026-08-02T00:00:00Z" },
-      { id: "g2", title: "My Space Game", first_seen_at: "2026-08-03T00:00:00Z" },
-      { id: "g3", title: "A Space Adventure", first_seen_at: "2026-08-01T00:00:00Z" },
+      { id: "g1", title: "Space Quest", first_seen_at: "2026-08-02T00:00:00Z", posted_at: null },
+      { id: "g2", title: "My Space Game", first_seen_at: "2026-08-03T00:00:00Z", posted_at: null },
+      { id: "g3", title: "A Space Adventure", first_seen_at: "2026-08-01T00:00:00Z", posted_at: null },
     ],
   },
   game_stats: {
@@ -172,9 +269,9 @@ const searchResponses = {
   },
   game_forum_posts: {
     data: [
-      { game_id: "g1", forum_url: "https://forum.makecode.com/t/g1", reply_count: 1, view_count: 2, post_cooked: null, reaction_count: 5, link_clicks: 2 },
-      { game_id: "g2", forum_url: "https://forum.makecode.com/t/g2", reply_count: 0, view_count: 1, post_cooked: null, reaction_count: 2, link_clicks: 0 },
-      { game_id: "g3", forum_url: "", reply_count: 0, view_count: 0, post_cooked: null, reaction_count: 8, link_clicks: 3 },
+      { game_id: "g1", forum_url: "https://forum.makecode.com/t/g1", reply_count: 1, view_count: 2, post_cooked: null, reaction_count: 5, link_clicks: 2, posted_at: null },
+      { game_id: "g2", forum_url: "https://forum.makecode.com/t/g2", reply_count: 0, view_count: 1, post_cooked: null, reaction_count: 2, link_clicks: 0, posted_at: null },
+      { game_id: "g3", forum_url: "", reply_count: 0, view_count: 0, post_cooked: null, reaction_count: 8, link_clicks: 3, posted_at: null },
     ],
   },
   game_likes: {
