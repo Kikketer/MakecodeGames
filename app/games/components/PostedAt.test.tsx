@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import { PostedAtTooltip, formatPostedAt, postedAtLabel } from "./PostedAt";
 
 describe("formatPostedAt", () => {
@@ -82,7 +82,7 @@ describe("PostedAtTooltip", () => {
     expect(tooltip.getAttribute("role")).toBe("tooltip");
   });
 
-  it("hides the tooltip by default and shows it on hover/focus classes", () => {
+  it("hides the tooltip by default and reveals it via the opacity-100 class", () => {
     render(
       <PostedAtTooltip
         date="2026-08-09T13:24:00.000Z"
@@ -92,8 +92,85 @@ describe("PostedAtTooltip", () => {
     );
     const tooltip = screen.getByRole("tooltip");
     expect(tooltip.className).toContain("opacity-0");
-    expect(tooltip.className).toContain("group-hover:opacity-100");
-    expect(tooltip.className).toContain("group-focus-within:opacity-100");
+    expect(tooltip.className).not.toContain("opacity-100");
+  });
+
+  it("does not show the tooltip immediately on hover (waits for the delay)", () => {
+    render(
+      <PostedAtTooltip
+        date="2026-08-09T13:24:00.000Z"
+        title="My Game"
+        titleClassName="truncate"
+      />,
+    );
+    const group = screen.getByRole("tooltip").parentElement!;
+    fireEvent.mouseEnter(group);
+    const tooltip = screen.getByRole("tooltip");
+    expect(tooltip.className).not.toContain("opacity-100");
+  });
+
+  it("shows the tooltip after the 3-second hover delay", () => {
+    vi.useFakeTimers();
+    try {
+      render(
+        <PostedAtTooltip
+          date="2026-08-09T13:24:00.000Z"
+          title="My Game"
+          titleClassName="truncate"
+        />,
+      );
+      const group = screen.getByRole("tooltip").parentElement!;
+      fireEvent.mouseEnter(group);
+      act(() => {
+        vi.advanceTimersByTime(3000);
+      });
+      expect(screen.getByRole("tooltip").className).toContain("opacity-100");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("hides the tooltip immediately on mouse leave and cancels the pending show", () => {
+    vi.useFakeTimers();
+    try {
+      render(
+        <PostedAtTooltip
+          date="2026-08-09T13:24:00.000Z"
+          title="My Game"
+          titleClassName="truncate"
+        />,
+      );
+      const group = screen.getByRole("tooltip").parentElement!;
+      fireEvent.mouseEnter(group);
+      fireEvent.mouseLeave(group);
+      act(() => {
+        vi.advanceTimersByTime(3000);
+      });
+      expect(screen.getByRole("tooltip").className).not.toContain("opacity-100");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows the tooltip after the 3-second focus delay", () => {
+    vi.useFakeTimers();
+    try {
+      render(
+        <PostedAtTooltip
+          date="2026-08-09T13:24:00.000Z"
+          title="My Game"
+          titleClassName="truncate"
+        />,
+      );
+      const heading = screen.getByRole("heading", { name: "My Game" });
+      fireEvent.focus(heading);
+      act(() => {
+        vi.advanceTimersByTime(3000);
+      });
+      expect(screen.getByRole("tooltip").className).toContain("opacity-100");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("makes the heading focusable when a tooltip is present", () => {
