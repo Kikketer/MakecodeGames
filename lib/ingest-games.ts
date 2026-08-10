@@ -287,6 +287,7 @@ async function upsertForumPost(
       forum_category_name: categoryName,
       jam_id: jamId || null,
       seen_at: now,
+      posted_at: post.created_at || null,
       reply_count: Math.max(0, replyCount - 1),
       view_count: viewCount,
       post_cooked: post.cooked,
@@ -417,6 +418,81 @@ async function refreshSinglePostReactions(forumPostId: number, linkClicks?: Map<
 
   const { error } = await supabaseServer.from("game_forum_posts").update(update).eq("forum_post_id", forumPostId);
   if (error) throw error;
+}
+
+/**
+ * Backfills `game_forum_posts.posted_at` for existing rows by re-fetching
+ * each post by ID from Discourse and reading `created_at`. No topic
+ * re-crawl is needed — we already have `forum_post_id` for every row.
+ *
+ * Rows with a non-null `posted_at` are skipped by default (pass
+ * `includeExisting: true` to re-fetch everything). Reuses the existing
+ * `batchWithDelay` + `CONCURRENCY_LIMIT` pacing so we don't hammer the
+ * forum. After the backfill, call `refresh_game_daily_stats()` so the
+ * materialized view picks up the new `posted_at` values.
+ */
+export async function backfillPostedAt(
+  options: {
+    includeExisting?: boolean;
+    delayMs?: number;
+    sleepFn?: (ms: number) => Promise<void>;
+    onProgress?: (message: string) => void;
+  } = {}
+): Promise<{ updated: number; skipped: number; errors: string[] }> {
+  const includeExisting = options.includeExisting ?? false;
+  const delayMs = options.delayMs ?? 500;
+  const sleepFn = options.sleepFn ?? sleep;
+  const log = options.onProgress || (() => {});
+
+  let query = supabaseServer.from("game_forum_posts").select("forum_post_id");
+  if (!includeExisting) {
+    query = query.is("posted_at", null);
+  }
+  const { data, error } = await query;
+  if (error) throw error;
+
+  const postIds = ((data || []) as { forum_post_id: number }[]).map((r) => r.forum_post_id);
+  log(`Backfilling posted_at for ${postIds.length} posts...`);
+
+  let updated = 0;
+  let skipped = 0;
+  const errors: string[] = [];
+
+  await batchWithDelay(
+    postIds,
+    CONCURRENCY_LIMIT,
+    delayMs,
+    async (forumPostId) => {
+      try {
+        const post = await fetchJson<DiscoursePost>(`${FORUM_BASE}/posts/${forumPostId}.json`);
+        if (!post || !post.created_at) {
+          skipped++;
+          return;
+        }
+        const { error: updateError } = await supabaseServer
+          .from("game_forum_posts")
+          .update({ posted_at: post.created_at })
+          .eq("forum_post_id", forumPostId);
+        if (updateError) throw updateError;
+        updated++;
+      } catch (e) {
+        errors.push(`post ${forumPostId}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+    sleepFn
+  );
+
+  log(`posted_at backfill done: ${updated} updated, ${skipped} skipped, ${errors.length} errors`);
+
+  try {
+    const { error: refreshError } = await supabaseServer.rpc("refresh_game_daily_stats");
+    if (refreshError) throw refreshError;
+    log("Refreshed game_daily_stats materialized view");
+  } catch (e) {
+    errors.push(`refresh_game_daily_stats failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  return { updated, skipped, errors };
 }
 
 /** Fetches a single topic page. Kept separate from `fetchJson` so it can be

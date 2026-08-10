@@ -13,6 +13,7 @@ const baseGame = {
   author_username: "player",
   first_seen_at: "2026-08-01T00:00:00Z",
   last_seen_at: "2026-08-01T00:00:00Z",
+  posted_at: null,
   likes: 5,
   clicks: 3,
   link_clicks: 2,
