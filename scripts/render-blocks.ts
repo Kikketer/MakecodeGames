@@ -1,6 +1,7 @@
 import { chromium, type Browser } from "playwright";
 import { mkdir, writeFile } from "fs/promises";
-import { dirname } from "path";
+import { dirname, resolve } from "path";
+import { fileURLToPath } from "url";
 import { extensions } from "../content/extensions";
 import type { ExtensionDoc, ExtensionTool } from "../content/extensions/types";
 
@@ -151,7 +152,12 @@ export function parseArgs(argv: string[]): { extensionFilter?: string; slugFilte
   return { extensionFilter, slugFilter };
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// Only run main() when executed directly, not when imported (e.g. by tests).
+const isDirectRun = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isDirectRun) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
