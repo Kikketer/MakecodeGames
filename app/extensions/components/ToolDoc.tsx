@@ -1,5 +1,6 @@
 import Image from "next/image";
 import type { ExtensionTool } from "@/content/extensions/types";
+import { BlockRenderer } from "@/app/extensions/components/BlockRenderer";
 
 export function ToolDoc({
   owner,
@@ -52,9 +53,7 @@ export function ToolDoc({
             className="max-w-full border-2 border-makecode-white bg-white"
           />
         ) : (
-          <pre className="max-w-full overflow-x-auto border-2 border-makecode-white bg-white px-4 py-3 font-mono text-sm text-makecode-black">
-            {tool.blockString}
-          </pre>
+          <BlockRenderer packageSlug={packageSlug} repo={repo} tool={tool} />
         )}
       </section>
 

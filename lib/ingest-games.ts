@@ -287,6 +287,7 @@ async function upsertForumPost(
       forum_category_name: categoryName,
       jam_id: jamId || null,
       seen_at: now,
+      posted_at: post.created_at || null,
       reply_count: Math.max(0, replyCount - 1),
       view_count: viewCount,
       post_cooked: post.cooked,
@@ -365,17 +366,27 @@ export async function ingestPost(
 async function refreshKnownPostMetadata(
   post: DiscoursePost,
   topic: DiscourseTopic,
-  clicks: number
+  clicks: number,
+  jamId?: string
 ) {
   "use step";
+  const update: {
+    reaction_count: number;
+    link_clicks: number;
+    forum_topic_title: string;
+    reaction_refreshed_at: string;
+    jam_id?: string;
+  } = {
+    reaction_count: post.reaction_users_count ?? 0,
+    link_clicks: clicks,
+    forum_topic_title: topic.title,
+    reaction_refreshed_at: new Date().toISOString(),
+  };
+  if (jamId) update.jam_id = jamId;
+
   const { error } = await supabaseServer
     .from("game_forum_posts")
-    .update({
-      reaction_count: post.reaction_users_count ?? 0,
-      link_clicks: clicks,
-      forum_topic_title: topic.title,
-      reaction_refreshed_at: new Date().toISOString(),
-    })
+    .update(update)
     .eq("forum_topic_id", topic.id)
     .eq("forum_post_id", post.id);
   if (error) throw error;
@@ -409,6 +420,81 @@ async function refreshSinglePostReactions(forumPostId: number, linkClicks?: Map<
   if (error) throw error;
 }
 
+/**
+ * Backfills `game_forum_posts.posted_at` for existing rows by re-fetching
+ * each post by ID from Discourse and reading `created_at`. No topic
+ * re-crawl is needed — we already have `forum_post_id` for every row.
+ *
+ * Rows with a non-null `posted_at` are skipped by default (pass
+ * `includeExisting: true` to re-fetch everything). Reuses the existing
+ * `batchWithDelay` + `CONCURRENCY_LIMIT` pacing so we don't hammer the
+ * forum. After the backfill, call `refresh_game_daily_stats()` so the
+ * materialized view picks up the new `posted_at` values.
+ */
+export async function backfillPostedAt(
+  options: {
+    includeExisting?: boolean;
+    delayMs?: number;
+    sleepFn?: (ms: number) => Promise<void>;
+    onProgress?: (message: string) => void;
+  } = {}
+): Promise<{ updated: number; skipped: number; errors: string[] }> {
+  const includeExisting = options.includeExisting ?? false;
+  const delayMs = options.delayMs ?? 500;
+  const sleepFn = options.sleepFn ?? sleep;
+  const log = options.onProgress || (() => {});
+
+  let query = supabaseServer.from("game_forum_posts").select("forum_post_id");
+  if (!includeExisting) {
+    query = query.is("posted_at", null);
+  }
+  const { data, error } = await query;
+  if (error) throw error;
+
+  const postIds = ((data || []) as { forum_post_id: number }[]).map((r) => r.forum_post_id);
+  log(`Backfilling posted_at for ${postIds.length} posts...`);
+
+  let updated = 0;
+  let skipped = 0;
+  const errors: string[] = [];
+
+  await batchWithDelay(
+    postIds,
+    CONCURRENCY_LIMIT,
+    delayMs,
+    async (forumPostId) => {
+      try {
+        const post = await fetchJson<DiscoursePost>(`${FORUM_BASE}/posts/${forumPostId}.json`);
+        if (!post || !post.created_at) {
+          skipped++;
+          return;
+        }
+        const { error: updateError } = await supabaseServer
+          .from("game_forum_posts")
+          .update({ posted_at: post.created_at })
+          .eq("forum_post_id", forumPostId);
+        if (updateError) throw updateError;
+        updated++;
+      } catch (e) {
+        errors.push(`post ${forumPostId}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+    sleepFn
+  );
+
+  log(`posted_at backfill done: ${updated} updated, ${skipped} skipped, ${errors.length} errors`);
+
+  try {
+    const { error: refreshError } = await supabaseServer.rpc("refresh_game_daily_stats");
+    if (refreshError) throw refreshError;
+    log("Refreshed game_daily_stats materialized view");
+  } catch (e) {
+    errors.push(`refresh_game_daily_stats failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  return { updated, skipped, errors };
+}
+
 /** Fetches a single topic page. Kept separate from `fetchJson` so it can be
  * its own step - functions that page through a thread (below) call this in
  * a loop and stay plain themselves, instead of nesting steps inside steps. */
@@ -429,17 +515,22 @@ function buildLinkClicksMap(page: TopicPage | null, into?: Map<string, number>):
 
 /**
  * Walks a topic's pages back-to-front, stopping as soon as it hits a page
- * where every post is already known (already has a `game_forum_posts` row).
- * This lets a mostly-ingested thread that gets bumped by one new reply only
- * re-fetch the handful of trailing pages that could contain unseen posts,
- * instead of re-crawling the whole thread.
+ * containing a post with id <= lastSeenPostId (i.e. a post we've crawled
+ * before — game or chat). Since Discourse post ids are monotonic within
+ * a topic, any post with id <= lastSeenPostId has been seen before, so
+ * there are no new posts on or before that page. The boundary page is
+ * still processed (posts pushed) before the stop check fires, so new
+ * games on the boundary page are not missed.
  *
- * Daily syncs cap the walk at 10 pages; backfills should use `fetchAllTopicPosts`
+ * On first crawl (lastSeenPostId = 0) the stop condition never fires —
+ * we crawl all pages (mini-backfill behavior). Daily syncs cap the walk
+ * at maxPages (default 10); jam topics pass Infinity since the stop
+ * condition is reliable. Backfills should use `fetchAllTopicPosts`
  * when the entire thread needs to be re-crawled.
  */
-async function fetchThreadTailPosts(
+export async function fetchThreadTailPosts(
   topicId: number,
-  knownIds: Set<number>,
+  lastSeenPostId: number,
   firstPage?: TopicPage,
   maxPages = 10
 ): Promise<{ posts: DiscoursePost[]; linkClicks: Map<string, number>; crawledIds: Set<number> }> {
@@ -466,8 +557,7 @@ async function fetchThreadTailPosts(
     pagesCrawled++;
     if (pagesCrawled >= maxPages) break;
 
-    const pageFullyKnown = pagePosts.length > 0 && pagePosts.every((post) => knownIds.has(post.id));
-    if (pageFullyKnown) break;
+    if (lastSeenPostId > 0 && pagePosts.some((post) => post.id <= lastSeenPostId)) break;
   }
 
   return { posts, linkClicks, crawledIds };
@@ -485,6 +575,31 @@ async function getKnownPostIdsStep(topicId: number): Promise<number[]> {
 
 async function getKnownPostIds(topicId: number): Promise<Set<number>> {
   return new Set(await getKnownPostIdsStep(topicId));
+}
+
+async function getLastSeenPostIdStep(topicId: number): Promise<number> {
+  "use step";
+  const { data } = await supabaseServer
+    .from("ingested_topics")
+    .select("last_seen_post_id")
+    .eq("forum_topic_id", topicId)
+    .single();
+  return (data?.last_seen_post_id as number) ?? 0;
+}
+
+async function getLastSeenPostId(topicId: number): Promise<number> {
+  return getLastSeenPostIdStep(topicId);
+}
+
+async function upsertLastSeenPostIdStep(topicId: number, postId: number): Promise<void> {
+  "use step";
+  const { error } = await supabaseServer
+    .from("ingested_topics")
+    .upsert(
+      { forum_topic_id: topicId, last_seen_post_id: postId, last_ingested_at: new Date().toISOString() },
+      { onConflict: "forum_topic_id" }
+    );
+  if (error) throw error;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -547,7 +662,11 @@ async function processTopicPosts(
         if (knownIds.has(post.id)) {
           const urls = extractShareUrls(post.cooked);
           const clicks = urls.length ? (linkClicks.get(urls[0]) ?? 0) : 0;
-          await refreshKnownPostMetadata(post, topic, clicks);
+          // Pass jamId for known posts that have share URLs (games) so they
+          // get associated with the jam during backfill. Chat posts (no
+          // share URLs) don't need a jam_id.
+          const jamIdForKnown = urls.length > 0 ? options.jamId : undefined;
+          await refreshKnownPostMetadata(post, topic, clicks, jamIdForKnown);
         } else {
           const urls = extractShareUrls(post.cooked);
           for (const url of urls) {
@@ -571,15 +690,19 @@ async function ingestTopic(
   options: IngestTopicOptions = {}
 ): Promise<{ games: number; errors: string[] }> {
   const knownIds = await getKnownPostIds(topic.id);
+  const lastSeenPostId = await getLastSeenPostId(topic.id);
   // A topic we've never looked at before is treated like a mini backfill
-  // (slower pacing); a topic we've already mostly mined only needs a small
-  // tail crawl, so the default (fast) pacing is fine.
-  const delayMs = knownIds.size === 0 ? 1000 : (options.delayMs ?? 100);
+  // (slower pacing); a topic we've already crawled only needs a small
+  // tail crawl, so the default (fast) pacing is fine. Use lastSeenPostId
+  // (which tracks all crawled posts, not just games) instead of knownIds
+  // — a topic that's all-chat has no known game posts but has been
+  // crawled, so fast pacing is correct.
+  const delayMs = lastSeenPostId === 0 ? 1000 : (options.delayMs ?? 100);
   const sleepFn = options.sleep ?? sleep;
 
   const { posts, linkClicks, crawledIds } = await fetchThreadTailPosts(
     topic.id,
-    knownIds,
+    lastSeenPostId,
     options.firstPage,
     options.maxPages
   );
@@ -616,6 +739,11 @@ async function ingestTopic(
     sleepFn
   );
 
+  // Track crawl progress so the next daily ingest knows where to start.
+  if (crawledIds.size > 0) {
+    await upsertLastSeenPostIdStep(topic.id, Math.max(...crawledIds));
+  }
+
   return { games, errors };
 }
 
@@ -628,6 +756,65 @@ async function fetchCategoryListingStep(
     ? `${FORUM_BASE}/c/${categoryId}.json?page=${page}`
     : `${FORUM_BASE}/c/${categoryId}.json`;
   return fetchJson(url);
+}
+
+/** Fetches one page of topics from a Discourse tag listing. Mirrors
+ * `fetchCategoryListingStep` but hits `/tag/{tag}.json` instead of a
+ * category. The tag endpoint is paginated (30 topics/page); the response
+ * includes `more_topics_url` when another page exists. */
+async function fetchTaggedTopicsStep(
+  tag: string,
+  page?: number
+): Promise<{ topic_list: { topics: DiscourseTopic[]; more_topics_url?: string | null } } | null> {
+  "use step";
+  const url = page
+    ? `${FORUM_BASE}/tag/${tag}.json?page=${page}`
+    : `${FORUM_BASE}/tag/${tag}.json`;
+  return fetchJson(url);
+}
+
+/** Title pattern that defines a mini game jam announcement topic. The
+ * `mini-game-jam` forum tag can be added to any post, so the tag alone
+ * isn't enough to identify jams — the title must match this pattern. */
+const MINI_GAME_JAM_TITLE_PATTERN = /mini game jam #\d+/i;
+
+/**
+ * Lists the mini game jam topics that are worth checking during a daily
+ * ingest run. Pulls the first page of the `mini-game-jam` tag listing
+ * (active topics bubble to the top, sorted by `bumped_at` descending),
+ * filters by the jam title pattern to exclude non-jam topics that happen
+ * to be tagged, then by the same 2-day activity window used by
+ * `listActiveCategoryTopics`.
+ */
+export async function listActiveJamTopics(lastIngestAt?: Date): Promise<DiscourseTopic[]> {
+  const tagged = await fetchTaggedTopicsStep("mini-game-jam");
+  if (!tagged) return [];
+  const jamTopics = tagged.topic_list.topics.filter((t) => MINI_GAME_JAM_TITLE_PATTERN.test(t.title));
+  // On the first ever run (no lastIngestAt), ingest every jam on the first
+  // page — mirrors listActiveCategoryTopics' first-run behavior. Subsequent
+  // runs only pick up jams bumped within the 2-day activity window.
+  if (!lastIngestAt) return jamTopics;
+  const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+  return jamTopics.filter((t) => isTopicActive(t, twoDaysAgo));
+}
+
+/**
+ * Lists ALL mini game jam topics from the `mini-game-jam` tag, paging
+ * through the entire listing (following `more_topics_url`) and filtering
+ * by the jam title pattern. Used by backfill to create `game_jams` rows
+ * for every historical jam (Jam #1 through the latest).
+ */
+export async function listAllJamTopics(): Promise<DiscourseTopic[]> {
+  const all: DiscourseTopic[] = [];
+  let page: number | undefined;
+  while (true) {
+    const listing = await fetchTaggedTopicsStep("mini-game-jam", page);
+    if (!listing || !listing.topic_list.topics.length) break;
+    all.push(...listing.topic_list.topics);
+    if (!listing.topic_list.more_topics_url) break;
+    page = (page ?? 0) + 1;
+  }
+  return all.filter((t) => MINI_GAME_JAM_TITLE_PATTERN.test(t.title));
 }
 
 export async function ingestJamTopic(
@@ -649,6 +836,7 @@ export async function ingestJamTopic(
     firstPage: first,
     delayMs,
     sleep: sleepFn,
+    maxPages: Infinity,
   });
 }
 
@@ -772,10 +960,18 @@ async function backfillTopic(
   const knownIds = await getKnownPostIds(topic.id);
   const { posts, linkClicks } = await fetchAllTopicPosts(topic.id);
 
-  return processTopicPosts(posts, topic, categoryMap, knownIds, linkClicks, delayMs, {
+  const result = await processTopicPosts(posts, topic, categoryMap, knownIds, linkClicks, delayMs, {
     jamId: options.jamId,
     skipFirstPost: options.skipFirstPost,
   });
+
+  // Track crawl progress so daily ingest knows where to start after a backfill.
+  if (posts.length > 0) {
+    const maxPostId = Math.max(...posts.map((p) => p.id));
+    await upsertLastSeenPostIdStep(topic.id, maxPostId);
+  }
+
+  return result;
 }
 
 export async function backfillJamTopic(
@@ -864,34 +1060,42 @@ export async function backfillAll(
     skipTopicIds?: Set<number>;
     onProgress?: (message: string) => void;
     onTopicCompleted?: (topic: DiscourseTopic, index: number, total: number) => void;
+    jamsOnly?: boolean;
   } = {}
 ): Promise<IngestResult> {
   const result: IngestResult = { jams: 0, games: 0, posts: 0, errors: [] };
   const log = options.onProgress || (() => {});
 
-  log("Backfilling jam topic 44801...");
-  const jam = await backfillJamTopic(44801, options.jamDelayMs ?? 1000);
-  result.jams = 1;
-  result.games += jam.games;
-  result.errors.push(...jam.errors);
-  log(`Jam topic done: ${jam.games} games, ${jam.errors.length} errors`);
+  const jamTopics = await listAllJamTopics();
+  log(`Backfilling ${jamTopics.length} jam topics...`);
+  for (const topic of jamTopics) {
+    const jam = await backfillJamTopic(topic.id, options.jamDelayMs ?? 1000);
+    result.jams++;
+    result.games += jam.games;
+    result.errors.push(...jam.errors);
+  }
+  log(`Jam topics done: ${result.jams} jams, ${result.games} games, ${result.errors.length} errors`);
 
-  const sinceText = options.since ? options.since.toISOString() : "all time";
-  log(`Backfilling category 5 topics since ${sinceText}...`);
-  const cat = await backfillCategoryTopics(5, {
-    since: options.since,
-    delayMs: options.categoryDelayMs ?? 1000,
-    topicDelayMs: options.categoryTopicDelayMs ?? 0,
-    listDelayMs: options.categoryDelayMs ?? 1000,
-    skipTopicIds: options.skipTopicIds,
-    onTopicStart: (topic, idx, total) => {
-      log(`[${idx + 1}/${total}] ${topic.title} — ${topic.posts_count} posts`);
-    },
-    onTopicCompleted: options.onTopicCompleted,
-  });
-  result.games += cat.games;
-  result.errors.push(...cat.errors);
-  log(`Category 5 done: ${cat.games} games, ${cat.errors.length} errors`);
+  if (options.jamsOnly) {
+    log(`Skipping category 5 backfill (jamsOnly mode)`);
+  } else {
+    const sinceText = options.since ? options.since.toISOString() : "all time";
+    log(`Backfilling category 5 topics since ${sinceText}...`);
+    const cat = await backfillCategoryTopics(5, {
+      since: options.since,
+      delayMs: options.categoryDelayMs ?? 1000,
+      topicDelayMs: options.categoryTopicDelayMs ?? 0,
+      listDelayMs: options.categoryDelayMs ?? 1000,
+      skipTopicIds: options.skipTopicIds,
+      onTopicStart: (topic, idx, total) => {
+        log(`[${idx + 1}/${total}] ${topic.title} — ${topic.posts_count} posts`);
+      },
+      onTopicCompleted: options.onTopicCompleted,
+    });
+    result.games += cat.games;
+    result.errors.push(...cat.errors);
+    log(`Category 5 done: ${cat.games} games, ${cat.errors.length} errors`);
+  }
 
   const { count } = await supabaseServer.from("game_forum_posts").select("*", { count: "exact", head: true });
   result.posts = count || 0;
@@ -957,10 +1161,13 @@ export async function ingestOnce(): Promise<IngestResult> {
     .single();
   const lastIngestAt = lastLog?.finished_at ? new Date(lastLog.finished_at as string) : undefined;
 
-  const jam = await ingestJamTopic(44801, lastIngestAt);
-  result.jams = 1;
-  result.games += jam.games;
-  result.errors.push(...jam.errors);
+  const jamTopics = await listActiveJamTopics(lastIngestAt);
+  for (const topic of jamTopics) {
+    const jam = await ingestJamTopic(topic.id, lastIngestAt);
+    result.jams++;
+    result.games += jam.games;
+    result.errors.push(...jam.errors);
+  }
 
   const cat = await ingestCategoryTopics(5, 20, lastIngestAt);
   result.games += cat.games;
