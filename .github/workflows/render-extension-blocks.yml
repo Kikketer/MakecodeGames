@@ -1,0 +1,64 @@
+name: Render extension blocks
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "content/extensions/**"
+      - "public/extensions/**"
+  workflow_dispatch:
+    inputs:
+      extension:
+        description: "Single extension to render (owner/repo), or empty for all extensions."
+        required: false
+        default: ""
+
+# Needed to push rendered SVGs back to main
+permissions:
+  contents: write
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.23.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Render block SVGs
+        env:
+          EXTENSION: ${{ inputs.extension }}
+        run: |
+          if [ -n "$EXTENSION" ]; then
+            echo "Rendering single extension: $EXTENSION"
+            pnpm render-blocks -- --extension "$EXTENSION"
+          else
+            echo "Rendering all extensions"
+            pnpm render-blocks
+          fi
+
+      - name: Commit and push rendered SVGs
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/extensions/
+          if git diff --cached --quiet; then
+            echo "No SVG changes to commit"
+          else
+            git commit -m "Render extension block SVGs"
+            git push
+          fi

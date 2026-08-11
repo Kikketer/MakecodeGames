@@ -105,19 +105,50 @@ async function renderTool(browser: Browser, extension: ExtensionDoc, tool: Exten
 }
 
 async function main() {
-  const onlySlug = process.argv[2];
+  const { extensionFilter, slugFilter } = parseArgs(process.argv.slice(2));
   const browser = await chromium.launch({ headless: true });
 
   try {
     for (const extension of extensions) {
+      if (extensionFilter && `${extension.owner}/${extension.repo}` !== extensionFilter) continue;
       for (const tool of extension.tools) {
-        if (onlySlug && tool.slug !== onlySlug) continue;
+        if (slugFilter && tool.slug !== slugFilter) continue;
         await renderTool(browser, extension, tool);
       }
     }
   } finally {
     await browser.close();
   }
+}
+
+/**
+ * Parse CLI args.
+ * Supported flags:
+ *   --extension owner/repo   Render only the named extension.
+ *   --slug slug              Render only the named tool slug (within the extension if --extension is also set).
+ * A single bare positional arg is treated as a slug for backwards compatibility.
+ */
+export function parseArgs(argv: string[]): { extensionFilter?: string; slugFilter?: string } {
+  let extensionFilter: string | undefined;
+  let slugFilter: string | undefined;
+
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--extension" || arg === "-e") {
+      extensionFilter = argv[++i];
+    } else if (arg === "--slug" || arg === "-s") {
+      slugFilter = argv[++i];
+    } else if (!arg.startsWith("-")) {
+      // Backwards compat: bare positional arg is a slug
+      slugFilter = arg;
+    }
+  }
+
+  if (extensionFilter && !extensionFilter.includes("/")) {
+    throw new Error(`--extension expects "owner/repo", got "${extensionFilter}"`);
+  }
+
+  return { extensionFilter, slugFilter };
 }
 
 main().catch((err) => {
