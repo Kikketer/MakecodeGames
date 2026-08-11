@@ -1,6 +1,11 @@
 import fs from "fs";
 import path from "path";
+import { config } from "dotenv";
 import { backfillAll } from "../lib/ingest-games";
+
+// Load environment variables from .env and .env.local
+config({ path: ".env" });
+config({ path: ".env.local", override: true });
 
 type CheckpointTopic = {
   id: number;
