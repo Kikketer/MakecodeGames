@@ -88,13 +88,22 @@ export function BlockRenderer({
   }, [repo, packageSlug, tool.example, tool.slug]);
 
   return (
-    <div>
+    <>
       <iframe
         ref={iframeRef}
         src={RENDERER_URL}
         title={`Block renderer for ${tool.title}`}
         aria-hidden="true"
-        style={{ position: "absolute", width: "1px", height: "1px", opacity: "0", border: "0" }}
+        style={{
+          position: "fixed",
+          top: "-9999px",
+          left: "-9999px",
+          width: "1px",
+          height: "1px",
+          opacity: "0",
+          border: "0",
+          pointerEvents: "none",
+        }}
       />
       {state === "ready" && svg ? (
         <div
@@ -112,6 +121,6 @@ export function BlockRenderer({
           {tool.blockString}
         </pre>
       )}
-    </div>
+    </>
   );
 }
