@@ -44,7 +44,6 @@ export type SearchGamesAndTopicsResult = {
   games: GameWithStats[];
 };
 
-type CategoryRow = { id: number; name: string; slug: string; parent_category_id?: number | null };
 type JamRow = { id: string; title: string };
 type StatsRow = { game_id: string; clicks: number };
 type PostRow = {
@@ -113,11 +112,6 @@ function mergeGameData(games: GameWithStats[], stats: StatsRow[], posts: PostRow
       posted_at: g.posted_at ?? p.postedAt,
     };
   });
-}
-
-export async function listCategories(): Promise<CategoryRow[]> {
-  const { data } = await supabaseServer.from("forum_categories").select("*").order("name");
-  return (data || []) as unknown as CategoryRow[];
 }
 
 export async function listJams(): Promise<JamRow[]> {

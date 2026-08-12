@@ -1,4 +1,4 @@
-import { listCategories, listJams, listGames } from "@/app/games/actions";
+import { listJams, listGames } from "@/app/games/actions";
 import { CategoryTabs } from "./components/CategoryTabs";
 import { JamSelector } from "./components/JamSelector";
 import { GameRow } from "./components/GameRow";
@@ -14,8 +14,7 @@ export default async function GamesPage({
   const activeJam = Array.isArray(params.jam) ? params.jam[0] : params.jam;
   const limit = activeCategory === "game-jams" ? 100 : 10;
 
-  const [categories, jams, newest, hot, trending] = await Promise.all([
-    listCategories(),
+  const [jams, newest, hot, trending] = await Promise.all([
     listJams(),
     listGames({ category: activeCategory, jam: activeJam, sort: "newest", limit }),
     listGames({ category: activeCategory, jam: activeJam, sort: "hot", limit }),
@@ -26,7 +25,7 @@ export default async function GamesPage({
 
   return (
     <main className="flex flex-1 flex-col gap-6 bg-makecode-dark px-6 py-6">
-      <CategoryTabs categories={categories} active={activeCategory} />
+      <CategoryTabs active={activeCategory} />
 
       {isJam && <JamSelector jams={jams} activeJam={activeJam} />}
 
