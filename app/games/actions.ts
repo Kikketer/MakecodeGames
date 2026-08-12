@@ -225,6 +225,84 @@ export async function listGames({ category, jam, topic, sort, limit = 10 }: List
   return merged.slice(0, limit);
 }
 
+export async function listAllGames({
+  letter,
+  page,
+  limit = 20,
+}: {
+  letter: string;
+  page: number;
+  limit?: number;
+}): Promise<{ games: GameWithStats[]; total: number }> {
+  const offset = (page - 1) * limit;
+  const isOther = letter === "other";
+
+  let query = supabaseServer.from("games").select("*", { count: "exact" });
+  if (isOther) {
+    query = query.not("title", "imatches", "^[a-z]");
+  } else {
+    query = query.ilike("title", `${letter}%`);
+  }
+  query = query.order("title").range(offset, offset + limit - 1);
+
+  const { data, count } = await query;
+  const gameRows = (data || []) as unknown as GameWithStats[];
+  const total = count ?? 0;
+  if (gameRows.length === 0) return { games: [], total };
+
+  const gameIds = gameRows.map((g) => g.id);
+  const [{ data: statsData }, { data: postsData }] = await Promise.all([
+    supabaseServer.from("game_stats").select("game_id, clicks").in("game_id", gameIds),
+    supabaseServer
+      .from("game_forum_posts")
+      .select("game_id,forum_url,forum_topic_title,reply_count,view_count,post_cooked,reaction_count,link_clicks,posted_at")
+      .in("game_id", gameIds),
+  ]);
+
+  const merged = mergeGameData(
+    gameRows,
+    (statsData || []) as unknown as StatsRow[],
+    (postsData || []) as unknown as PostRow[]
+  );
+
+  merged.sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: "base" }));
+
+  return { games: merged, total };
+}
+
+export async function countAllLetters(): Promise<Record<string, number>> {
+  const counts: Record<string, number> = {};
+  for (const letter of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
+    counts[letter] = 0;
+  }
+  counts["other"] = 0;
+
+  const PAGE_SIZE = 1000;
+  let offset = 0;
+  for (;;) {
+    const { data } = await supabaseServer
+      .from("games")
+      .select("title")
+      .range(offset, offset + PAGE_SIZE - 1);
+    const titles = (data || []) as { title: string }[];
+    if (titles.length === 0) break;
+
+    for (const { title } of titles) {
+      const first = title.charAt(0).toUpperCase();
+      if (first >= "A" && first <= "Z") {
+        counts[first]++;
+      } else {
+        counts["other"]++;
+      }
+    }
+
+    if (titles.length < PAGE_SIZE) break;
+    offset += PAGE_SIZE;
+  }
+
+  return counts;
+}
+
 async function hydrateGames(gameIds: string[]): Promise<GameWithStats[]> {
   if (gameIds.length === 0) return [];
 

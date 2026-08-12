@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { addLike, listGames, recordClick, searchGames, searchGamesAndTopics, getTopicTitle } from "./actions";
+import { addLike, listGames, listAllGames, countAllLetters, recordClick, searchGames, searchGamesAndTopics, getTopicTitle } from "./actions";
 
 const mockSupabase = vi.hoisted(() => ({ from: vi.fn(), rpc: vi.fn() }));
 const mockGetUser = vi.hoisted(() => vi.fn());
@@ -412,6 +412,159 @@ describe("getTopicTitle", () => {
 
     const title = await getTopicTitle(999);
     expect(title).toBeNull();
+  });
+});
+
+const allGamesResponses = {
+  games: {
+    data: [
+      { id: "a1", title: "Apple Game", first_seen_at: "2026-08-01T00:00:00Z", posted_at: null },
+      { id: "a2", title: "aardvark quest", first_seen_at: "2026-08-02T00:00:00Z", posted_at: null },
+      { id: "b1", title: "Banana Run", first_seen_at: "2026-08-03T00:00:00Z", posted_at: null },
+      { id: "o1", title: "123 Numbers", first_seen_at: "2026-08-04T00:00:00Z", posted_at: null },
+      { id: "o2", title: "!Special", first_seen_at: "2026-08-05T00:00:00Z", posted_at: null },
+    ],
+    count: 5,
+  },
+  game_stats: {
+    data: [
+      { game_id: "a1", clicks: 3 },
+      { game_id: "a2", clicks: 1 },
+      { game_id: "b1", clicks: 5 },
+      { game_id: "o1", clicks: 0 },
+      { game_id: "o2", clicks: 2 },
+    ],
+  },
+  game_forum_posts: {
+    data: [
+      { game_id: "a1", forum_url: "https://forum/a1", reply_count: 1, view_count: 10, post_cooked: null, reaction_count: 4, link_clicks: 2, posted_at: null },
+      { game_id: "a2", forum_url: "https://forum/a2", reply_count: 0, view_count: 5, post_cooked: null, reaction_count: 2, link_clicks: 1, posted_at: null },
+      { game_id: "b1", forum_url: "https://forum/b1", reply_count: 3, view_count: 20, post_cooked: null, reaction_count: 7, link_clicks: 3, posted_at: null },
+      { game_id: "o1", forum_url: "", reply_count: 0, view_count: 0, post_cooked: null, reaction_count: 0, link_clicks: 0, posted_at: null },
+      { game_id: "o2", forum_url: "https://forum/o2", reply_count: 1, view_count: 2, post_cooked: null, reaction_count: 1, link_clicks: 0, posted_at: null },
+    ],
+  },
+};
+
+describe("listAllGames", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSupabase.from = vi.fn((table: string) => makeBuilder(table, allGamesResponses[table as keyof typeof allGamesResponses]));
+    mockGetUser.mockReset();
+    mockRefreshReactions.mockReset();
+    mockGetAlgoliaSearchClient.mockReset();
+  });
+
+  it("sorts games alphabetically ascending, case-insensitive", async () => {
+    const { games } = await listAllGames({ letter: "A", page: 1 });
+
+    // Case-insensitive alphabetical sort. Symbols/digits sort before
+    // letters under localeCompare with sensitivity "base"; the key
+    // assertion is that "aardvark quest" precedes "Apple Game".
+    expect(games.map((g) => g.title)).toEqual([
+      "!Special",
+      "123 Numbers",
+      "aardvark quest",
+      "Apple Game",
+      "Banana Run",
+    ]);
+    // Explicit case-insensitive check on the A titles.
+    const aTitles = games.filter((g) => g.title.toLowerCase().startsWith("a")).map((g) => g.title);
+    expect(aTitles).toEqual(["aardvark quest", "Apple Game"]);
+  });
+
+  it("merges stats and forum posts into game cards", async () => {
+    const { games } = await listAllGames({ letter: "A", page: 1 });
+
+    const a1 = games.find((g) => g.id === "a1");
+    expect(a1?.likes).toBe(4);
+    expect(a1?.clicks).toBe(3);
+    expect(a1?.link_clicks).toBe(2);
+    expect(a1?.plays).toBe(5);
+    expect(a1?.forum_url).toBe("https://forum/a1");
+    expect(a1?.replies).toBe(1);
+    expect(a1?.views).toBe(10);
+
+    const o1 = games.find((g) => g.id === "o1");
+    expect(o1?.likes).toBe(0);
+    expect(o1?.clicks).toBe(0);
+    expect(o1?.plays).toBe(0);
+    expect(o1?.forum_url).toBe("");
+  });
+
+  it("returns the total count from the query", async () => {
+    const { total } = await listAllGames({ letter: "A", page: 1 });
+    expect(total).toBe(5);
+  });
+
+  it("queries the games table for the letter", async () => {
+    await listAllGames({ letter: "B", page: 1 });
+    expect(mockSupabase.from).toHaveBeenCalledWith("games");
+  });
+
+  it("returns empty games with total when no data", async () => {
+    mockSupabase.from = vi.fn((table: string) =>
+      makeBuilder(table, table === "games" ? { data: [], count: 0 } : allGamesResponses[table as keyof typeof allGamesResponses])
+    );
+
+    const result = await listAllGames({ letter: "Z", page: 1 });
+    expect(result.games).toEqual([]);
+    expect(result.total).toBe(0);
+  });
+
+  it("handles the other bucket without error", async () => {
+    const { games } = await listAllGames({ letter: "other", page: 1 });
+    // Mock returns all games; verify it doesn't throw and returns merged data
+    expect(games.length).toBeGreaterThan(0);
+    expect(mockSupabase.from).toHaveBeenCalledWith("games");
+  });
+});
+
+describe("countAllLetters", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetUser.mockReset();
+    mockRefreshReactions.mockReset();
+    mockGetAlgoliaSearchClient.mockReset();
+  });
+
+  it("returns counts for A-Z plus other", async () => {
+    mockSupabase.from = vi.fn((table: string) =>
+      makeBuilder(table, {
+        data: [
+          { title: "Apple Game" },
+          { title: "aardvark quest" },
+          { title: "Banana Run" },
+          { title: "123 Numbers" },
+          { title: "!Special" },
+        ],
+      })
+    );
+
+    const counts = await countAllLetters();
+
+    // All 26 letters should be present
+    for (const letter of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
+      expect(counts).toHaveProperty(letter);
+    }
+    expect(counts).toHaveProperty("other");
+
+    expect(counts["A"]).toBe(2);
+    expect(counts["B"]).toBe(1);
+    expect(counts["other"]).toBe(2);
+    // Letters with no games should be 0
+    expect(counts["Z"]).toBe(0);
+  });
+
+  it("returns all zeros when there are no games", async () => {
+    mockSupabase.from = vi.fn(() => makeBuilder("games", { data: [] }));
+
+    const counts = await countAllLetters();
+
+    for (const letter of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
+      expect(counts[letter]).toBe(0);
+    }
+    expect(counts["other"]).toBe(0);
   });
 });
 
