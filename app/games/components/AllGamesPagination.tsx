@@ -4,7 +4,7 @@ export function AllGamesPagination({
   letter,
   page,
   total,
-  limit = 20,
+  limit = 50,
 }: {
   letter: string;
   page: number;

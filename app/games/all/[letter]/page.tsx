@@ -10,7 +10,7 @@ const VALID_LETTERS = new Set([
   "other",
 ]);
 
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 50;
 
 export default async function AllGamesLetterPage({
   params,

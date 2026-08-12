@@ -228,7 +228,7 @@ export async function listGames({ category, jam, topic, sort, limit = 10 }: List
 export async function listAllGames({
   letter,
   page,
-  limit = 20,
+  limit = 50,
 }: {
   letter: string;
   page: number;
