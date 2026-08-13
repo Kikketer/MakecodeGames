@@ -35,6 +35,8 @@ jobs:
         env:
           VERCEL_URL: ${{ inputs.vercel_url || vars.INGEST_URL }}
           INGEST_SECRET: ${{ secrets.INGEST_SECRET }}
+          CF_ACCESS_CLIENT_ID: ${{ vars.CLOUDFLARE_CLIENT }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CLOUDFLARE_SECRET }}
           EXTENSION: ${{ inputs.extension }}
           FORCE: ${{ inputs.force == true && 'true' || '' }}
         run: |
@@ -45,14 +47,20 @@ jobs:
           if [ -n "$EXTENSION" ]; then
             echo "Documenting single extension: $EXTENSION"
             curl -sS --fail-with-body -X GET "${VERCEL_URL}/api/extensions/document?extension=${EXTENSION}${FORCE_QUERY}" \
-              -H "Authorization: Bearer ${INGEST_SECRET}"
+              -H "Authorization: Bearer ${INGEST_SECRET}" \
+              -H "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" \
+              -H "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}"
           else
             echo "Documenting full batch of extensions"
             if [ -n "$FORCE" ]; then
               curl -sS --fail-with-body -X GET "${VERCEL_URL}/api/extensions/document?force=true" \
-                -H "Authorization: Bearer ${INGEST_SECRET}"
+                -H "Authorization: Bearer ${INGEST_SECRET}" \
+                -H "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" \
+                -H "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}"
             else
               curl -sS --fail-with-body -X GET "${VERCEL_URL}/api/extensions/document" \
-                -H "Authorization: Bearer ${INGEST_SECRET}"
+                -H "Authorization: Bearer ${INGEST_SECRET}" \
+                -H "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" \
+                -H "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}"
             fi
           fi
