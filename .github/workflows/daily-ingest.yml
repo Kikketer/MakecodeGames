@@ -15,5 +15,7 @@ jobs:
         # results in the Vercel dashboard (Observability > Workflows) or the
         # ingest_log table, not this job's logs.
         run: |
-          curl -sS --fail-with-body -X GET "${{ vars.INGEST_URL }}/api/games/ingest" \
-            -H "Authorization: Bearer ${{ secrets.INGEST_SECRET }}"
+          curl -sS --fail-with-body -X POST "${{ vars.INGEST_URL }}/api/games/ingest" \
+            -H "Authorization: Bearer ${{ secrets.INGEST_SECRET }}" \
+            -H "CF-Access-Client-Id: ${{ vars.CLOUDFLARE_CLIENT }}" \
+            -H "CF-Access-Client-Secret: ${{ secrets.CLOUDFLARE_SECRET }}"
