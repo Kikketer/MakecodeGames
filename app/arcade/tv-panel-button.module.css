@@ -1,0 +1,66 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  width: 100%;
+}
+
+.label {
+  font-family: 'Courier New', monospace;
+  font-size: 1rem;
+  color: #aaa;
+  letter-spacing: 0.08em;
+  user-select: none;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.7);
+  font-weight: bolder;
+}
+
+.button {
+  display: block;
+  width: 2.3rem;
+  height: 1.2rem;
+  background: linear-gradient(180deg, #737373 0%, #7f7f7f 40%, #6b6b6b 60%, #7f7f7f 100%);
+  border: none;
+  border-radius: 0.2rem;
+  cursor: pointer;
+  position: relative;
+  box-shadow:
+    0 0.15rem 0 #111,
+    0 0.25rem 0.35rem rgba(0, 0, 0, 0.7),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.4);
+  transition: box-shadow 0.07s, transform 0.07s;
+  outline: none;
+}
+
+.button::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, transparent 60%);
+  border-radius: 0.2rem;
+  pointer-events: none;
+}
+
+.button:hover {
+  background: linear-gradient(180deg, #686868 0%, #464646 40%, #3a3a3a 60%, #464646 100%);
+}
+
+.button:active {
+  transform: translateY(0.1rem);
+  box-shadow:
+    0 0.05rem 0 #111,
+    0 0.1rem 0.15rem rgba(0, 0, 0, 0.7),
+    inset 0 1px 0 rgba(0, 0, 0, 0.3),
+    inset 0 2px 4px rgba(0, 0, 0, 0.4);
+}
+
+.button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.wide {
+  width: 100%;
+}
