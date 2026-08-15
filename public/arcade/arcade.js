@@ -4,8 +4,10 @@
 // removed. The MakeCode simulator handles its own input and audio inside the
 // iframe.
 
-// Load the canonical version config at module evaluation time so all simulator
-// references are consistent without having to rewrite this static file.
+// Load the canonical version config at init time so all simulator references
+// are consistent without having to rewrite this static file. NOTE: this file is
+// loaded as a classic <script> (not an ES module), so it MUST NOT use top-level
+// await — that is a syntax error in classic scripts and breaks the whole file.
 async function loadArcadeVersion() {
   try {
     const res = await fetch('/arcade-version.json')
@@ -21,11 +23,6 @@ async function loadArcadeVersion() {
   }
 }
 
-const arcadeVersion = await loadArcadeVersion()
-const SIM_URL = arcadeVersion.simUrl
-const DEFAULT_CDN_URL = arcadeVersion.cdnUrl
-const DEFAULT_TARGET_VERSION = arcadeVersion.targetVersion
-
 const state = {
   timerElement: null,
   makecodeIframe: null,
@@ -36,7 +33,11 @@ const state = {
   playedGames: [],
   hasStarted: false,
   pendingGameIndex: -1,
-  pendingMarkAsPlayed: true
+  pendingMarkAsPlayed: true,
+  // Simulator config — populated by init() from /arcade-version.json.
+  simUrl: '/simulator/4.1.6/slim.html',
+  cdnUrl: '/simulator/4.1.6/cdn',
+  targetVersion: '4.1.6'
 }
 
 const loadGameList = async () => {
@@ -75,9 +76,9 @@ const loadMakeCodeGame = async (binaryPath) => {
 
     // Parse metadata (binary.js may or may not have a meta header)
     let meta = {
-      cdnUrl: DEFAULT_CDN_URL,
+      cdnUrl: state.cdnUrl,
       version: 'arcade',
-      targetVersion: DEFAULT_TARGET_VERSION,
+      targetVersion: state.targetVersion,
     }
     code.replace(/^\/\/\s+meta=([^\n]+)\n/m, function (m, metasrc) {
       meta = JSON.parse(metasrc)
@@ -115,7 +116,7 @@ const loadMakeCodeGame = async (binaryPath) => {
     window.addEventListener('message', handleMessage)
 
     // Now load the simulator — ready event won't fire until after this
-    iframe.src = SIM_URL
+    iframe.src = state.simUrl
   } catch (err) {
     console.error('[makecode] Error loading:', err)
     // Fall back to loading a random game
@@ -303,6 +304,12 @@ const init = async () => {
   state.makecodeIframe = document.getElementById('makecode-frame')
   const dataDuration = parseInt(state.timerElement?.dataset?.duration ?? '60', 10)
   state.timeRemaining = (isNaN(dataDuration) || dataDuration < 1) ? 60 : dataDuration
+
+  // Load simulator config before any game can be loaded.
+  const arcadeVersion = await loadArcadeVersion()
+  state.simUrl = arcadeVersion.simUrl
+  state.cdnUrl = arcadeVersion.cdnUrl
+  state.targetVersion = arcadeVersion.targetVersion
 
   // Show click-to-start overlay
   const clickToStart = document.getElementById('click-to-start')

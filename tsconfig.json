@@ -22,6 +22,9 @@
       }
     ],
     "paths": {
+      "@/app/games/*": ["./app/(main)/games/*"],
+      "@/app/extensions/*": ["./app/(main)/extensions/*"],
+      "@/app/auth/*": ["./app/(main)/auth/*"],
       "@/*": ["./*"]
     }
   },
