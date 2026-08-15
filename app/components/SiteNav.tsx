@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 const TABS = [
   { label: "Games", href: "/games" },
   { label: "Extensions", href: "/extensions" },
+  { label: "One Minute Arcade", href: "/arcade" },
 ];
 
 function isActive(pathname: string, href: string) {

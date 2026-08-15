@@ -1,0 +1,44 @@
+{
+  "games": [
+    {
+      "name": "Vikings of Four",
+      "path": "/arcade/games/VikingsOfFour.js"
+    },
+    {
+      "name": "Pokemon Rescue",
+      "path": "/arcade/games/Pokemon_Rescue.js"
+    },
+    {
+      "name": "Double Death",
+      "path": "/arcade/games/double_death.js"
+    },
+    {
+      "name": "Greedy Pirates",
+      "path": "/arcade/games/Greedy_Pirates.js"
+    },
+    {
+      "name": "Super Star Story",
+      "path": "/arcade/games/Super_Star_Story.js"
+    },
+    {
+      "name": "Paddle the River",
+      "path": "/arcade/games/Paddle_the_River.js"
+    },
+    {
+      "name": "Sonic 3 Miniboss",
+      "path": "/arcade/games/Sonic_3_Miniboss.js"
+    },
+    {
+      "name": "Betta Golf",
+      "path": "/arcade/games/BettaGolf_super_long_name.js"
+    },
+    {
+      "name": "Doom",
+      "path": "/arcade/games/Doom.js"
+    },
+    {
+      "name": "Infection",
+      "path": "/arcade/games/Infection.js"
+    }
+  ]
+}
