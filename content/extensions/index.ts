@@ -1,4 +1,5 @@
 import type { ExtensionDoc, ExtensionTool } from "@/content/extensions/types";
+import { pxtLantern } from "@/content/extensions/felixtsu/pxt-lantern";
 import { spriteWalls } from "@/content/extensions/Sonicblaston62/Sprite-Walls";
 import { arcadeCameraOffset } from "@/content/extensions/riknoll/arcade-camera-offset";
 import { arcadeSplitScreen } from "@/content/extensions/riknoll/arcade-split-screen";
@@ -9,6 +10,7 @@ export const extensions: ExtensionDoc[] = [
   arcadeSplitScreen,
   arcadeCameraOffset,
   spriteWalls,
+  pxtLantern,
 ];
 
 export function getExtension(owner: string, repo: string): ExtensionDoc | undefined {
