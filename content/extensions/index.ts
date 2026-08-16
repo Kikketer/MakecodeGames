@@ -1,10 +1,12 @@
 import type { ExtensionDoc, ExtensionTool } from "@/content/extensions/types";
+import { raycastingPxtExtension } from "@/content/extensions/The-Code-Zone/Raycasting-pxt-extension";
 import { arcadeSplitScreen } from "@/content/extensions/riknoll/arcade-split-screen";
 import { arcadeSpriteUtil } from "@/content/extensions/jwunderl/arcade-sprite-util";
 
 export const extensions: ExtensionDoc[] = [
   arcadeSpriteUtil,
-  arcadeSplitScreen,
+  arcadeSplitScreen,,
+  raycastingPxtExtension,
 ];
 
 export function getExtension(owner: string, repo: string): ExtensionDoc | undefined {
