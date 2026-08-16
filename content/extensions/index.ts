@@ -1,10 +1,12 @@
 import type { ExtensionDoc, ExtensionTool } from "@/content/extensions/types";
+import { spriteWalls } from "@/content/extensions/Sonicblaston62/Sprite-Walls";
 import { arcadeSplitScreen } from "@/content/extensions/riknoll/arcade-split-screen";
 import { arcadeSpriteUtil } from "@/content/extensions/jwunderl/arcade-sprite-util";
 
 export const extensions: ExtensionDoc[] = [
   arcadeSpriteUtil,
-  arcadeSplitScreen,
+  arcadeSplitScreen,,
+  spriteWalls,
 ];
 
 export function getExtension(owner: string, repo: string): ExtensionDoc | undefined {
