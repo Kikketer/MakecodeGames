@@ -1,5 +1,5 @@
 import type { ExtensionDoc, ExtensionTool } from "@/content/extensions/types";
-import { spriteWalls } from "@/content/extensions/Sonicblaston62/Sprite-Walls";
+import { arcadeTilemapAStar } from "@/content/extensions/jwunderl/arcade-tilemap-a-star";
 import { arcadeCameraOffset } from "@/content/extensions/riknoll/arcade-camera-offset";
 import { arcadeSplitScreen } from "@/content/extensions/riknoll/arcade-split-screen";
 import { arcadeSpriteUtil } from "@/content/extensions/jwunderl/arcade-sprite-util";
@@ -8,7 +8,7 @@ export const extensions: ExtensionDoc[] = [
   arcadeSpriteUtil,
   arcadeSplitScreen,
   arcadeCameraOffset,
-  spriteWalls,
+  arcadeTilemapAStar,
 ];
 
 export function getExtension(owner: string, repo: string): ExtensionDoc | undefined {
