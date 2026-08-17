@@ -1,4 +1,5 @@
 import type { ExtensionDoc, ExtensionTool } from "@/content/extensions/types";
+import { arcadeShader } from "@/content/extensions/riknoll/arcade-shader";
 import { pxtImageMorph } from "@/content/extensions/UnicycleDumpTruck/pxt-image-morph";
 import { tilemappath } from "@/content/extensions/UnsignedArduino/TilemapPath";
 import { arcadeOverworld } from "@/content/extensions/riknoll/arcade-overworld";
@@ -15,6 +16,7 @@ export const extensions: ExtensionDoc[] = [
   arcadeSplitScreen,
   arcadeCameraOffset,
   spriteWalls,
+  arcadeShader,
   pxtImageMorph,
   tilemappath,
   arcadeOverworld,
