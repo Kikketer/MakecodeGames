@@ -1,4 +1,5 @@
 import type { ExtensionDoc, ExtensionTool } from "@/content/extensions/types";
+import { tilemappath } from "@/content/extensions/UnsignedArduino/TilemapPath";
 import { arcadeOverworld } from "@/content/extensions/riknoll/arcade-overworld";
 import { retrofx } from "@/content/extensions/CrzLe0723/RetroFx";
 import { pxtArcadeVectorMath } from "@/content/extensions/robo-technical-group/pxt-arcade-vector-math";
@@ -13,6 +14,7 @@ export const extensions: ExtensionDoc[] = [
   arcadeSplitScreen,
   arcadeCameraOffset,
   spriteWalls,
+  tilemappath,
   arcadeOverworld,
   retrofx,
   pxtArcadeVectorMath,
