@@ -1,4 +1,5 @@
 import type { ExtensionDoc, ExtensionTool } from "@/content/extensions/types";
+import { retrofx } from "@/content/extensions/CrzLe0723/RetroFx";
 import { pxtArcadeVectorMath } from "@/content/extensions/robo-technical-group/pxt-arcade-vector-math";
 import { pxtLantern } from "@/content/extensions/felixtsu/pxt-lantern";
 import { spriteWalls } from "@/content/extensions/Sonicblaston62/Sprite-Walls";
@@ -11,6 +12,7 @@ export const extensions: ExtensionDoc[] = [
   arcadeSplitScreen,
   arcadeCameraOffset,
   spriteWalls,
+  retrofx,
   pxtArcadeVectorMath,
   pxtLantern,
 ];
