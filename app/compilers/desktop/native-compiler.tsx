@@ -182,9 +182,9 @@ export default function NativeCompiler() {
             disabled={busy}
             className="rounded-lg border-4 border-makecode-black bg-white p-2 font-sans text-sm font-bold text-makecode-black focus:outline-none disabled:opacity-50"
           >
-            <option value="x86-64">x86-64 (Intel/AMD Linux)</option>
-            <option value="arm64">ARM64 / aarch64 (Raspberry Pi 3/4/5, Apple Silicon Linux)</option>
-            <option value="win64">Windows x86-64</option>
+            <option value="x86-64">x86-64 — Linux (Intel/AMD)</option>
+            <option value="arm64">ARM64 / aarch64 — Linux (Raspberry Pi 3/4/5, Pi Zero 2 W)</option>
+            <option value="win64">x86-64 — Windows</option>
           </select>
           <ArchInstructions arch={arch} />
         </div>

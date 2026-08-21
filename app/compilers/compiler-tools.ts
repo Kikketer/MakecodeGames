@@ -15,7 +15,7 @@ export const COMPILER_TOOLS: CompilerTool[] = [
     id: "desktop",
     title: "PNG to Desktop",
     description:
-      "Convert a MakeCode Arcade PNG export into a standalone native executable archive (Game + libpxt.so / pxt.dll) for x86-64, ARM64, or Windows. Handy for running a game on a desktop Linux PC or a Raspberry Pi style arcade machine.",
+      "Convert a MakeCode Arcade PNG export into a standalone native executable archive (Game + libpxt.so / pxt.dll) for Linux (x86-64 or ARM64) or Windows. No macOS support — Mac users should use PNG to JavaScript. Handy for running a game on a desktop Linux PC or a Raspberry Pi style arcade machine.",
     href: "/compilers/desktop",
   },
   {
