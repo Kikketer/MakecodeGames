@@ -7,7 +7,7 @@ const TABS = [
   { label: "Games", href: "/games" },
   { label: "Extensions", href: "/extensions" },
   { label: "Compilers", href: "/compilers" },
-  { label: "One Minute Arcade", href: "/arcade" },
+  // { label: "One Minute Arcade", href: "/arcade" },
 ];
 
 function isActive(pathname: string, href: string) {
