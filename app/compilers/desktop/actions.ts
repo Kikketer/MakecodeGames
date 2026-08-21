@@ -7,8 +7,6 @@ import {
   type CompileNativeResult,
 } from "@/lib/compile-proxy";
 
-export type { CompileNativeResult };
-
 /**
  * Server Action for the PNG → native desktop compile path.
  *
