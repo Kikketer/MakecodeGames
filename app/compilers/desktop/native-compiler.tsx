@@ -6,6 +6,7 @@ import { compileNativeAction } from "./actions";
 import ArchInstructions from "./arch-instructions";
 // Loads the shared `window.turnstile` global augmentation.
 import "@/lib/turnstile-global";
+import { useTurnstileEnabled, turnstileSiteKey } from "@/lib/turnstile-client";
 
 type Status = "idle" | "uploading" | "done" | "error";
 type Arch = "x86-64" | "arm64" | "win64";
@@ -14,8 +15,6 @@ interface CompileResult {
   filename: string;
   url: string;
 }
-
-const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
 
 function base64ToArrayBuffer(base64: string): ArrayBuffer {
   const binary = atob(base64);
@@ -27,6 +26,8 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
 }
 
 export default function NativeCompiler() {
+  const turnstileActive = useTurnstileEnabled();
+  const TURNSTILE_SITE_KEY = turnstileSiteKey();
   const [status, setStatus] = useState<Status>("idle");
   const [log, setLog] = useState<string[]>([]);
   const [result, setResult] = useState<CompileResult | null>(null);
@@ -57,7 +58,7 @@ export default function NativeCompiler() {
         theme: "dark",
       },
     );
-  }, [handleTurnstileCallback, handleTurnstileExpired, handleTurnstileError]);
+  }, [TURNSTILE_SITE_KEY, handleTurnstileCallback, handleTurnstileExpired, handleTurnstileError]);
 
   const appendLog = (lines: string[]) => {
     setLog((prev) => {
@@ -79,7 +80,7 @@ export default function NativeCompiler() {
   const compile = useCallback(
     async (file: File) => {
       if (status === "uploading") return;
-      if (TURNSTILE_SITE_KEY && !turnstileToken) {
+      if (turnstileActive && !turnstileToken) {
         appendLog(["Please complete the human verification first."]);
         setStatus("error");
         return;
@@ -126,7 +127,7 @@ export default function NativeCompiler() {
         resetTurnstile();
       }
     },
-    [status, arch, turnstileToken, resetTurnstile],
+    [status, arch, turnstileToken, turnstileActive, resetTurnstile],
   );
 
   const handleFile = (file: File | null | undefined) => {
@@ -155,11 +156,11 @@ export default function NativeCompiler() {
   };
 
   const busy = status === "uploading";
-  const turnstileReady = !TURNSTILE_SITE_KEY || !!turnstileToken;
+  const turnstileReady = !turnstileActive || !!turnstileToken;
 
   return (
     <div className="flex w-full max-w-xl flex-col gap-6">
-      {TURNSTILE_SITE_KEY && (
+      {turnstileActive && (
         <>
           <Script
             src="https://challenges.cloudflare.com/turnstile/v0/api.js"

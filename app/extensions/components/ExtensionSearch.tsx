@@ -6,11 +6,13 @@ import Script from "next/script";
 import { searchExtensionTools, type SearchResult } from "../actions";
 // Loads the shared `window.turnstile` global augmentation.
 import "@/lib/turnstile-global";
+import { useTurnstileEnabled, turnstileSiteKey } from "@/lib/turnstile-client";
 
 const MAX_QUERY_LENGTH = 400;
-const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
 
 export function ExtensionSearch({ children }: { children: ReactNode }) {
+  const turnstileActive = useTurnstileEnabled();
+  const TURNSTILE_SITE_KEY = turnstileSiteKey();
   const [query, setQuery] = useState("");
   const [result, setResult] = useState<SearchResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -79,7 +81,7 @@ export function ExtensionSearch({ children }: { children: ReactNode }) {
         theme: "dark",
       },
     );
-  }, [handleTurnstileCallback, handleTurnstileExpired, handleTurnstileError]);
+  }, [TURNSTILE_SITE_KEY, handleTurnstileCallback, handleTurnstileExpired, handleTurnstileError]);
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -87,7 +89,7 @@ export function ExtensionSearch({ children }: { children: ReactNode }) {
     if (!trimmed) return;
 
     // If Turnstile is enabled, require a token before submitting
-    if (TURNSTILE_SITE_KEY && !turnstileToken) return;
+    if (turnstileActive && !turnstileToken) return;
 
     setError(null);
     startTransition(async () => {
@@ -100,11 +102,11 @@ export function ExtensionSearch({ children }: { children: ReactNode }) {
     });
   }
 
-  const turnstileReady = !TURNSTILE_SITE_KEY || !!turnstileToken;
+  const turnstileReady = !turnstileActive || !!turnstileToken;
 
   return (
     <div className="flex flex-col gap-4">
-      {TURNSTILE_SITE_KEY && (
+      {turnstileActive && (
         <Script
           src="https://challenges.cloudflare.com/turnstile/v0/api.js"
           strategy="afterInteractive"
@@ -132,7 +134,7 @@ export function ExtensionSearch({ children }: { children: ReactNode }) {
           </button>
         </div>
 
-        {TURNSTILE_SITE_KEY && (
+        {turnstileActive && (
           <div ref={turnstileContainerRef} className="min-h-[65px]" />
         )}
       </form>
