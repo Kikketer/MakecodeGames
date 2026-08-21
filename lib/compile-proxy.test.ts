@@ -186,19 +186,55 @@ describe("proxyCompileNative", () => {
     }
   });
 
-  it("returns a fallback error when the upstream returns invalid JSON", async () => {
+  it("returns a diagnostic error when the upstream returns invalid JSON", async () => {
     vi.stubEnv("INGEST_URL", "https://example.com");
     vi.stubEnv("INGEST_SECRET", "s3cret");
 
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response("not json", { status: 502 })),
+      vi.fn(
+        async () =>
+          new Response("not json", {
+            status: 502,
+            headers: { "Content-Type": "text/plain" },
+          }),
+      ),
     );
 
     const form = makeForm(new Blob([new Uint8Array([1])]), "x86-64");
     const res = await proxyCompileNative(form, "x86-64");
     expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.error).toBe("Invalid upstream response");
+    if (!res.ok) {
+      expect(res.error).toContain("status 502");
+      expect(res.error).toContain("text/plain");
+      expect(res.error).toContain("not json");
+    }
+  });
+
+  it("includes content-type and body preview for HTML challenge responses", async () => {
+    vi.stubEnv("INGEST_URL", "https://example.com");
+    vi.stubEnv("INGEST_SECRET", "s3cret");
+
+    const html = "<!DOCTYPE html><html><body>Access denied</body></html>";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(html, {
+            status: 403,
+            headers: { "Content-Type": "text/html; charset=utf-8" },
+          }),
+      ),
+    );
+
+    const form = makeForm(new Blob([new Uint8Array([1])]), "x86-64");
+    const res = await proxyCompileNative(form, "x86-64");
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error).toContain("status 403");
+      expect(res.error).toContain("text/html");
+      expect(res.error).toContain("Access denied");
+    }
   });
 
   it("returns a network error when fetch throws", async () => {

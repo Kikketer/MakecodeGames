@@ -102,9 +102,27 @@ export async function proxyCompileNative(
       body: upstreamForm,
       headers: ingestAuthHeaders(),
     });
-    const json = (await upstream
-      .json()
-      .catch(() => ({ ok: false, error: "Invalid upstream response", log: [] }))) as CompileNativeResult;
+
+    // Read the body as text first so we can include diagnostic details
+    // (status, content-type, body preview) when JSON parsing fails — a bare
+    // "Invalid upstream response" is impossible to debug in production.
+    const bodyText = await upstream.text();
+    let json: CompileNativeResult;
+    try {
+      json = JSON.parse(bodyText) as CompileNativeResult;
+    } catch {
+      const contentType = upstream.headers.get("content-type") ?? "unknown";
+      const preview = bodyText.slice(0, 200).replace(/\s+/g, " ").trim();
+      console.error(
+        `[compile-native] Upstream returned non-JSON: status=${upstream.status} content-type=${contentType} body=${preview}`,
+      );
+      return {
+        ok: false,
+        error: `Invalid upstream response (status ${upstream.status}, ${contentType}): ${preview || "<empty body>"}`,
+        log: [],
+      };
+    }
+
     if (!upstream.ok) {
       return {
         ok: false,
