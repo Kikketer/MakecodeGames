@@ -4,29 +4,11 @@ import { useState, useRef, useCallback, useTransition, useEffect, type ReactNode
 import Link from "next/link";
 import Script from "next/script";
 import { searchExtensionTools, type SearchResult } from "../actions";
+// Loads the shared `window.turnstile` global augmentation.
+import "@/lib/turnstile-global";
 
 const MAX_QUERY_LENGTH = 400;
 const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
-
-/** Minimal type for the Cloudflare Turnstile global injected by the script. */
-interface TurnstileGlobal {
-  render: (
-    container: HTMLElement,
-    options: {
-      sitekey: string;
-      callback?: (token: string) => void;
-      "expired-callback"?: () => void;
-      "error-callback"?: () => void;
-      theme?: "light" | "dark" | "auto";
-    },
-  ) => string;
-}
-
-declare global {
-  interface Window {
-    turnstile?: TurnstileGlobal;
-  }
-}
 
 export function ExtensionSearch({ children }: { children: ReactNode }) {
   const [query, setQuery] = useState("");
