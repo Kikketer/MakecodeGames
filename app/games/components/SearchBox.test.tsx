@@ -17,12 +17,6 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: mockPush }),
 }));
 
-vi.mock("next/image", () => ({
-  default: function MockImage({ src, alt }: { src: string; alt: string }) {
-    return <div data-src={src} data-alt={alt} />;
-  },
-}));
-
 function makeGame(title: string, id: string): GameWithStats {
   return {
     id,
