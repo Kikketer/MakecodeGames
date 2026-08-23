@@ -1,4 +1,3 @@
-import Image from "next/image";
 import type { ExtensionTool } from "@/content/extensions/types";
 
 export function ToolDoc({
@@ -43,12 +42,11 @@ export function ToolDoc({
           </p>
         )}
         {hasImage ? (
-          <Image
+          <img
             src={`/extensions/${owner}/${repo}/${tool.slug}.svg`}
             alt={`${tool.blockString} block`}
             width={674}
             height={316}
-            unoptimized
             className="max-w-full border-2 border-makecode-white bg-white"
           />
         ) : (
