@@ -9,6 +9,9 @@ export interface UtilityTool {
  * The image-converter utilities listed on the /utilities menu. Each one wraps
  * the shared image-converter component with a different default tab and
  * metadata, mirroring the /compilers pattern.
+ *
+ * PNG → img and PNG → .jres share a single route (`/utilities/png-to-img`)
+ * because the underlying tool emits both outputs from one PNG upload.
  */
 export const UTILITY_TOOLS: UtilityTool[] = [
   {
@@ -17,13 +20,6 @@ export const UTILITY_TOOLS: UtilityTool[] = [
     description:
       "Convert a PNG into a MakeCode Arcade img literal and a matching .jres entry for use in Visual Studio Code. Supports top-row, pxt.json, and default palettes, plus sprite-sheet slicing.",
     href: "/utilities/png-to-img",
-  },
-  {
-    id: "png-to-jres",
-    title: "PNG → .jres",
-    description:
-      "Convert a PNG into a MakeCode Arcade .jres entry (image/x-mkcd-f4) for importing into images.g.jres in Visual Studio Code. Same PNG tool, focused on the .jres output.",
-    href: "/utilities/png-to-jres",
   },
   {
     id: "jres-to-img",

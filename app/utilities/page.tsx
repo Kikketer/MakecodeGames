@@ -12,7 +12,6 @@ function ToolIcon({ id }: { id: string }) {
   const common = "h-7 w-7";
   switch (id) {
     case "png-to-img":
-    case "png-to-jres":
       return (
         <svg
           className={common}
