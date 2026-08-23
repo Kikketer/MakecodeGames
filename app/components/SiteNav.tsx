@@ -7,6 +7,7 @@ const TABS = [
   { label: "Games", href: "/games" },
   { label: "Extensions", href: "/extensions" },
   { label: "Compilers", href: "/compilers" },
+  { label: "Utilities", href: "/utilities" },
   // { label: "One Minute Arcade", href: "/arcade" },
 ];
 
