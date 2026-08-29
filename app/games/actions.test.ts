@@ -30,6 +30,26 @@ function makeBuilder(table: string, response: unknown) {
   });
 }
 
+// Like makeBuilder, but records every chained method call (e.g. order/limit)
+// so tests can assert that sort + limit are pushed into the Supabase query
+// rather than applied to an unbounded fetch in JS.
+function makeRecordingBuilder(response: unknown) {
+  const calls: { method: string; args: unknown[] }[] = [];
+  const thenable = {
+    then: (resolve: (value: unknown) => void) => resolve(response),
+  };
+  const builder = new Proxy(thenable, {
+    get(_, prop) {
+      if (prop === "then") return thenable.then;
+      return (...args: unknown[]) => {
+        calls.push({ method: String(prop), args });
+        return builder;
+      };
+    },
+  });
+  return { builder, calls };
+}
+
 const responses = {
   games: {
     data: [
@@ -53,6 +73,15 @@ const responses = {
     data: [
       { id: "g1", first_seen_at: "2026-08-01T00:00:00Z", posted_at: null, likes: 10, clicks: 2, link_clicks: 4, plays: 6, forum_url: "https://forum.makecode.com/t/g1", forum_topic_title: null, replies: 3, views: 5, post_cooked: null },
       { id: "g2", first_seen_at: "2026-08-02T00:00:00Z", posted_at: null, likes: 5, clicks: 0, link_clicks: 1, plays: 1, forum_url: "https://forum.makecode.com/t/g2", forum_topic_title: null, replies: 0, views: 1, post_cooked: null },
+    ],
+  },
+  // game_scores mirrors game_daily_stats plus the computed score columns the
+  // view adds (sort_date/hot_score/trending_score). The fetchAll path queries
+  // this view with ORDER BY + LIMIT pushed into the database.
+  game_scores: {
+    data: [
+      { id: "g1", first_seen_at: "2026-08-01T00:00:00Z", posted_at: null, likes: 10, clicks: 2, link_clicks: 4, plays: 6, forum_url: "https://forum.makecode.com/t/g1", forum_topic_title: null, replies: 3, views: 5, post_cooked: null, sort_date: "2026-08-01T00:00:00Z", hot_score: 4.0, trending_score: 6 },
+      { id: "g2", first_seen_at: "2026-08-02T00:00:00Z", posted_at: null, likes: 5, clicks: 0, link_clicks: 1, plays: 1, forum_url: "https://forum.makecode.com/t/g2", forum_topic_title: null, replies: 0, views: 1, post_cooked: null, sort_date: "2026-08-02T00:00:00Z", hot_score: 2.0, trending_score: 1 },
     ],
   },
   game_stats_snapshots: {
@@ -106,11 +135,20 @@ describe("listGames", () => {
     mockGetAlgoliaSearchClient.mockReset();
   });
 
-  it("uses reaction_count as likes and game_stats for clicks", async () => {
+  it("fetchAll queries game_scores and passes rows through with their fields", async () => {
     mockGetUser.mockResolvedValue(null);
+    const { builder, calls } = makeRecordingBuilder(responses.game_scores);
+    mockSupabase.from = vi.fn((table: string) => (table === "game_scores" ? builder : makeBuilder(table, responses[table as keyof typeof responses])));
 
     const result = await listGames({ sort: "hot", limit: 10 });
 
+    // The fetchAll path must query game_scores (not game_daily_stats) and push
+    // ORDER BY + LIMIT into the database instead of fetching all rows.
+    expect(mockSupabase.from).toHaveBeenCalledWith("game_scores");
+    expect(mockSupabase.from).not.toHaveBeenCalledWith("game_daily_stats");
+    expect(calls).toContainEqual({ method: "order", args: ["hot_score", { ascending: false, nullsFirst: false }] });
+    expect(calls).toContainEqual({ method: "limit", args: [10] });
+    // Rows are returned as-is from the view (no JS re-sort / re-slice).
     expect(result).toHaveLength(2);
     const g1 = result.find((g) => g.id === "g1");
     const g2 = result.find((g) => g.id === "g2");
@@ -124,26 +162,19 @@ describe("listGames", () => {
     expect(g2?.plays).toBe(1);
   });
 
-  it("sorts by trending delta from snapshots", async () => {
-    mockSupabase.from = vi.fn((table: string) =>
-      makeBuilder(table, {
-        ...responses,
-        game_stats_snapshots: {
-          data: [
-            { game_id: "g1", likes: 8, plays: 3 },
-            { game_id: "g2", likes: 5, plays: 0 },
-          ],
-        },
-      }[table])
-    );
+  it("fetchAll trending orders by trending_score and does not fetch snapshots in JS", async () => {
+    const { builder, calls } = makeRecordingBuilder(responses.game_scores);
+    mockSupabase.from = vi.fn((table: string) => (table === "game_scores" ? builder : makeBuilder(table, responses[table as keyof typeof responses])));
 
     const result = await listGames({ sort: "trending", limit: 10 });
 
+    expect(mockSupabase.from).toHaveBeenCalledWith("game_scores");
+    expect(calls).toContainEqual({ method: "order", args: ["trending_score", { ascending: false, nullsFirst: false }] });
+    expect(calls).toContainEqual({ method: "limit", args: [10] });
+    // The trending score is computed in the view via the snapshot join, so the
+    // app must not issue a separate game_stats_snapshots query.
+    expect(mockSupabase.from).not.toHaveBeenCalledWith("game_stats_snapshots");
     expect(result.map((g) => g.id)).toEqual(["g1", "g2"]);
-    const g1 = result.find((g) => g.id === "g1");
-    const g2 = result.find((g) => g.id === "g2");
-    expect((g1?.likes ?? 0) + (g1?.plays ?? 0)).toBe(16);
-    expect((g2?.likes ?? 0) + (g2?.plays ?? 0)).toBe(6);
   });
 
   it("fetches games for a forum topic", async () => {
@@ -154,71 +185,61 @@ describe("listGames", () => {
     expect(result.map((g) => g.id)).toEqual(expect.arrayContaining(["g1", "g2"]));
   });
 
-  it("sorts newest by posted_at when present (fetchAll path)", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime("2026-08-10T00:00:00.000Z");
-    mockSupabase.from = vi.fn((table: string) =>
-      makeBuilder(table, {
-        ...responses,
-        game_daily_stats: {
-          data: [
-            // g1 was crawled recently but posted long ago; g2 was crawled
-            // earlier but posted more recently. Newest should put g2 first.
-            { id: "g1", first_seen_at: "2026-08-09T00:00:00Z", posted_at: "2026-07-01T00:00:00Z", likes: 0, clicks: 0, link_clicks: 0, plays: 0, forum_url: "", forum_topic_title: null, replies: 0, views: 0, post_cooked: null },
-            { id: "g2", first_seen_at: "2026-08-01T00:00:00Z", posted_at: "2026-08-05T00:00:00Z", likes: 0, clicks: 0, link_clicks: 0, plays: 0, forum_url: "", forum_topic_title: null, replies: 0, views: 0, post_cooked: null },
-          ],
-        },
-      }[table])
-    );
+  it("fetchAll newest orders by sort_date (coalesced posted_at/first_seen_at)", async () => {
+    // The coalesce(posted_at, first_seen_at) fallback now lives in the
+    // game_scores view's sort_date column, so the app just orders by it.
+    const scoresData = {
+      data: [
+        // Returned in DB-sorted order: g2 (posted 08-05) before g1 (posted 07-01).
+        { id: "g2", first_seen_at: "2026-08-01T00:00:00Z", posted_at: "2026-08-05T00:00:00Z", likes: 0, clicks: 0, link_clicks: 0, plays: 0, forum_url: "", forum_topic_title: null, replies: 0, views: 0, post_cooked: null, sort_date: "2026-08-05T00:00:00Z", hot_score: 0, trending_score: 0 },
+        { id: "g1", first_seen_at: "2026-08-09T00:00:00Z", posted_at: "2026-07-01T00:00:00Z", likes: 0, clicks: 0, link_clicks: 0, plays: 0, forum_url: "", forum_topic_title: null, replies: 0, views: 0, post_cooked: null, sort_date: "2026-07-01T00:00:00Z", hot_score: 0, trending_score: 0 },
+      ],
+    };
+    const { builder, calls } = makeRecordingBuilder(scoresData);
+    mockSupabase.from = vi.fn((table: string) => (table === "game_scores" ? builder : makeBuilder(table, responses[table as keyof typeof responses])));
 
     const result = await listGames({ sort: "newest", limit: 10 });
-    vi.useRealTimers();
 
+    expect(calls).toContainEqual({ method: "order", args: ["sort_date", { ascending: false, nullsFirst: false }] });
+    expect(calls).toContainEqual({ method: "limit", args: [10] });
+    // Rows come back in DB order; the app must not re-sort them.
     expect(result.map((g) => g.id)).toEqual(["g2", "g1"]);
   });
 
-  it("falls back to first_seen_at for newest when posted_at is null", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime("2026-08-10T00:00:00.000Z");
-    mockSupabase.from = vi.fn((table: string) =>
-      makeBuilder(table, {
-        ...responses,
-        game_daily_stats: {
-          data: [
-            { id: "g1", first_seen_at: "2026-08-01T00:00:00Z", posted_at: null, likes: 0, clicks: 0, link_clicks: 0, plays: 0, forum_url: "", forum_topic_title: null, replies: 0, views: 0, post_cooked: null },
-            { id: "g2", first_seen_at: "2026-08-02T00:00:00Z", posted_at: null, likes: 0, clicks: 0, link_clicks: 0, plays: 0, forum_url: "", forum_topic_title: null, replies: 0, views: 0, post_cooked: null },
-          ],
-        },
-      }[table])
-    );
+  it("fetchAll newest with null posted_at relies on the view's sort_date coalesce", async () => {
+    // When posted_at is null the view's sort_date falls back to first_seen_at.
+    // The app only orders by sort_date, so this just verifies the query shape.
+    const scoresData = {
+      data: [
+        { id: "g2", first_seen_at: "2026-08-02T00:00:00Z", posted_at: null, likes: 0, clicks: 0, link_clicks: 0, plays: 0, forum_url: "", forum_topic_title: null, replies: 0, views: 0, post_cooked: null, sort_date: "2026-08-02T00:00:00Z", hot_score: 0, trending_score: 0 },
+        { id: "g1", first_seen_at: "2026-08-01T00:00:00Z", posted_at: null, likes: 0, clicks: 0, link_clicks: 0, plays: 0, forum_url: "", forum_topic_title: null, replies: 0, views: 0, post_cooked: null, sort_date: "2026-08-01T00:00:00Z", hot_score: 0, trending_score: 0 },
+      ],
+    };
+    const { builder, calls } = makeRecordingBuilder(scoresData);
+    mockSupabase.from = vi.fn((table: string) => (table === "game_scores" ? builder : makeBuilder(table, responses[table as keyof typeof responses])));
 
     const result = await listGames({ sort: "newest", limit: 10 });
-    vi.useRealTimers();
 
+    expect(calls).toContainEqual({ method: "order", args: ["sort_date", { ascending: false, nullsFirst: false }] });
     expect(result.map((g) => g.id)).toEqual(["g2", "g1"]);
   });
 
-  it("sorts hot by posted_at time-decay when present", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime("2026-08-10T00:00:00.000Z");
-    // Both games have identical likes+plays, so the one posted more recently
-    // (smaller age) wins under the hot formula. g1 was crawled today but
-    // posted a month ago; g2 was crawled early but posted yesterday.
-    mockSupabase.from = vi.fn((table: string) =>
-      makeBuilder(table, {
-        ...responses,
-        game_daily_stats: {
-          data: [
-            { id: "g1", first_seen_at: "2026-08-09T00:00:00Z", posted_at: "2026-07-10T00:00:00Z", likes: 10, clicks: 0, link_clicks: 0, plays: 10, forum_url: "", forum_topic_title: null, replies: 0, views: 0, post_cooked: null },
-            { id: "g2", first_seen_at: "2026-08-01T00:00:00Z", posted_at: "2026-08-09T00:00:00Z", likes: 10, clicks: 0, link_clicks: 0, plays: 10, forum_url: "", forum_topic_title: null, replies: 0, views: 0, post_cooked: null },
-          ],
-        },
-      }[table])
-    );
+  it("fetchAll hot orders by hot_score (time-decay computed in the view)", async () => {
+    // hot_score is computed in the view from likes+plays and age, so the app
+    // just orders by hot_score. Provide rows in DB-sorted order.
+    const scoresData = {
+      data: [
+        { id: "g2", first_seen_at: "2026-08-01T00:00:00Z", posted_at: "2026-08-09T00:00:00Z", likes: 10, clicks: 0, link_clicks: 0, plays: 10, forum_url: "", forum_topic_title: null, replies: 0, views: 0, post_cooked: null, sort_date: "2026-08-09T00:00:00Z", hot_score: 8.0, trending_score: 0 },
+        { id: "g1", first_seen_at: "2026-08-09T00:00:00Z", posted_at: "2026-07-10T00:00:00Z", likes: 10, clicks: 0, link_clicks: 0, plays: 10, forum_url: "", forum_topic_title: null, replies: 0, views: 0, post_cooked: null, sort_date: "2026-07-10T00:00:00Z", hot_score: 1.0, trending_score: 0 },
+      ],
+    };
+    const { builder, calls } = makeRecordingBuilder(scoresData);
+    mockSupabase.from = vi.fn((table: string) => (table === "game_scores" ? builder : makeBuilder(table, responses[table as keyof typeof responses])));
 
     const result = await listGames({ sort: "hot", limit: 10 });
-    vi.useRealTimers();
 
+    expect(calls).toContainEqual({ method: "order", args: ["hot_score", { ascending: false, nullsFirst: false }] });
+    expect(calls).toContainEqual({ method: "limit", args: [10] });
     expect(result.map((g) => g.id)).toEqual(["g2", "g1"]);
   });
 
