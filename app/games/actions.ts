@@ -127,20 +127,48 @@ export async function listJams(): Promise<JamRow[]> {
 
 type IdRow = { game_id: string };
 
+/**
+ * Maps a sort mode to the computed score column on the `game_scores` view.
+ * The view adds `sort_date` (coalesced posted_at/first_seen_at), `hot_score`
+ * (time-decayed likes+plays), and `trending_score` (likes+plays delta vs the
+ * latest snapshot) on top of `game_daily_stats`.
+ */
+function sortScoreColumn(sort: ListParams["sort"]): string {
+  switch (sort) {
+    case "newest":
+      return "sort_date";
+    case "hot":
+      return "hot_score";
+    case "trending":
+      return "trending_score";
+    case "likes":
+      return "likes";
+  }
+}
+
 export async function listGames({ category, jam, topic, sort, limit = 10 }: ListParams): Promise<GameWithStats[]> {
   const fetchAll = (!category || category === "all") && !topic;
+
+  // The "all" front page reads from the game_scores view and pushes
+  // ORDER BY + LIMIT into the database so Postgres ranks the full dataset
+  // and returns only `limit` rows. Fetching every game_daily_stats row
+  // (capped by Supabase's default row limit) and sorting an arbitrary
+  // subset in JS caused the front page to stop reflecting new games once
+  // the table grew past that cap.
+  if (fetchAll) {
+    const { data } = await supabaseServer
+      .from("game_scores")
+      .select("*")
+      .order(sortScoreColumn(sort), { ascending: false, nullsFirst: false })
+      .limit(limit);
+    return (data || []) as unknown as GameWithStats[];
+  }
+
   let gameIds: string[] = [];
-  let games: unknown[] = [];
-  let stats: unknown[] = [];
-  let posts: unknown[] = [];
 
   if (topic) {
     const { data } = await supabaseServer.from("game_forum_posts").select("game_id").eq("forum_topic_id", topic);
     gameIds = [...new Set(((data || []) as unknown as IdRow[]).map((d) => d.game_id))];
-  } else if (fetchAll) {
-    const { data: dailyStats } = await supabaseServer.from("game_daily_stats").select("*");
-    games = (dailyStats || []) as unknown[];
-    gameIds = (games as { id: string }[]).map((g) => g.id);
   } else if (category === "game-jams") {
     const query = jam
       ? supabaseServer.from("game_category_stats").select("game_id").eq("jam_id", jam)
@@ -164,28 +192,21 @@ export async function listGames({ category, jam, topic, sort, limit = 10 }: List
 
   if (gameIds.length === 0) return [];
 
-  if (!fetchAll) {
-    const [{ data: gamesData }, { data: statsData }, { data: postsData }] = await Promise.all([
-      supabaseServer.from("games").select("*").in("id", gameIds),
-      supabaseServer.from("game_stats").select("game_id, clicks").in("game_id", gameIds),
-      supabaseServer
-        .from("game_forum_posts")
-        .select("game_id,forum_url,forum_topic_title,reply_count,view_count,post_cooked,reaction_count,link_clicks,posted_at")
-        .in("game_id", gameIds),
-    ]);
-    games = gamesData || [];
-    stats = statsData || [];
-    posts = postsData || [];
-  }
+  const [{ data: gamesData }, { data: statsData }, { data: postsData }] = await Promise.all([
+    supabaseServer.from("games").select("*").in("id", gameIds),
+    supabaseServer.from("game_stats").select("game_id, clicks").in("game_id", gameIds),
+    supabaseServer
+      .from("game_forum_posts")
+      .select("game_id,forum_url,forum_topic_title,reply_count,view_count,post_cooked,reaction_count,link_clicks,posted_at")
+      .in("game_id", gameIds),
+  ]);
 
-  const gameRows = (games || []) as unknown as GameWithStats[];
-  const merged = fetchAll
-    ? gameRows
-    : mergeGameData(
-        gameRows,
-        (stats || []) as unknown as StatsRow[],
-        (posts || []) as unknown as PostRow[]
-      );
+  const gameRows = (gamesData || []) as unknown as GameWithStats[];
+  const merged = mergeGameData(
+    gameRows,
+    (statsData || []) as unknown as StatsRow[],
+    (postsData || []) as unknown as PostRow[]
+  );
 
   if (sort === "likes") {
     merged.sort((a, b) => b.likes - a.likes);
