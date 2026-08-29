@@ -13,13 +13,14 @@ export default async function GamesPage({
   const activeCategory = (Array.isArray(params.category) ? params.category[0] : params.category) || "all";
   const activeJam = Array.isArray(params.jam) ? params.jam[0] : params.jam;
   const limit = activeCategory === "game-jams" ? 100 : 10;
+  const jamFilter = activeCategory === "game-jams" ? activeJam : undefined;
 
   const [categories, jams, newest, hot, trending] = await Promise.all([
     listCategories(),
     listJams(),
-    listGames({ category: activeCategory, jam: activeJam, sort: "newest", limit }),
-    listGames({ category: activeCategory, jam: activeJam, sort: "hot", limit }),
-    listGames({ category: activeCategory, jam: activeJam, sort: "trending", limit }),
+    listGames({ category: activeCategory, jam: jamFilter, sort: "newest", limit }),
+    listGames({ category: activeCategory, jam: jamFilter, sort: "hot", limit }),
+    listGames({ category: activeCategory, jam: jamFilter, sort: "trending", limit }),
   ]);
 
   const isJam = activeCategory === "game-jams";
