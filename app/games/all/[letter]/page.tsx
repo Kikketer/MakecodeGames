@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { listCategories, listAllGames, countAllLetters } from "@/app/games/actions";
+import { listAllGames, countAllLetters } from "@/app/games/actions";
 import { CategoryTabs } from "../../components/CategoryTabs";
 import { AlphabetIndex } from "../../components/AlphabetIndex";
 import { AllGamesPagination } from "../../components/AllGamesPagination";
@@ -30,8 +30,7 @@ export default async function AllGamesLetterPage({
   const rawPage = Array.isArray(paramsObj.page) ? paramsObj.page[0] : paramsObj.page;
   const page = Math.max(1, Math.floor(Number(rawPage) || 1));
 
-  const [categories, { games, total }, counts] = await Promise.all([
-    listCategories(),
+  const [{ games, total }, counts] = await Promise.all([
     listAllGames({ letter, page, limit: PAGE_SIZE }),
     countAllLetters(),
   ]);
@@ -40,7 +39,7 @@ export default async function AllGamesLetterPage({
 
   return (
     <main className="flex flex-1 flex-col gap-6 bg-makecode-dark px-6 py-6">
-      <CategoryTabs categories={categories} active="" allActive />
+      <CategoryTabs active="" allActive />
 
       <div className="flex flex-col gap-3">
         <h1 className="font-sans text-2xl font-bold text-makecode-yellow">
