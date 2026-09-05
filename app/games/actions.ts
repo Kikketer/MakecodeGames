@@ -448,7 +448,11 @@ export async function searchGamesAndTopics(
         view_count: Number(hit.view_count ?? 0),
       }));
 
-      const gameIds = (gameResult?.hits || []).map((hit) => String(hit.objectID));
+      const gameHits = (gameResult?.hits || []).filter((hit) => {
+        const author = hit.author_username ? String(hit.author_username) : null;
+        return !excluded.has(author ?? "");
+      });
+      const gameIds = gameHits.map((hit) => String(hit.objectID));
       const games = gameIds.length > 0 ? await hydrateGames(gameIds, excluded) : [];
 
       return { topics, games };
