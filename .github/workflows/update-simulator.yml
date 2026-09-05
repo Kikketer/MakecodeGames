@@ -8,7 +8,7 @@ name: Update MakeCode Arcade simulator
 #
 # Like CreationStationArcade, this workflow checks npm for a new pxt-arcade
 # version, vendors the matching simulator, runs lint/tests/build, and then
-# commits and pushes the result directly to main.
+# opens a pull request with the updated simulator assets.
 
 on:
   schedule:
@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   update-simulator:
@@ -99,16 +100,29 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: dummy
         run: pnpm build
 
-      - name: Commit and push
+      - name: Create Pull Request
         if: steps.check.outputs.changed == 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit \
-            -m "${{ steps.check.outputs.commit-message }}" \
-            -m "simulator / target: ${{ steps.check.outputs.previous }} → ${{ steps.check.outputs.target }}" \
-            -m "pxt-arcade: ${{ steps.check.outputs.pxt-arcade }}" \
-            -m "pxt-core: ${{ steps.check.outputs.pxt }}" \
-            -m "Automated simulator bump. Old simulator directories are kept for backwards compatibility."
-          git push origin main
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.CREATE_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          commit-message: ${{ steps.check.outputs.commit-message }}
+          title: ${{ steps.check.outputs.title }}
+          body: |
+            Weekly MakeCode Arcade simulator update.
+
+            - simulator / target: ${{ steps.check.outputs.previous }} → ${{ steps.check.outputs.target }}
+            - `pxt-arcade` (npm latest): ${{ steps.check.outputs.pxt-arcade }}
+            - pxt (compiler) version this target was built with: ${{ steps.check.outputs.pxt }}
+
+            Changes:
+            - `public/simulator/${{ steps.check.outputs.target }}/` vendored (full + slim variant)
+            - `public/arcade-version.json` updated
+            - Old simulator directories are kept so pre-compiled `/arcade` games that still reference an older runtime continue to work.
+
+            Verification:
+            - Slim simulator variant verified (chrome hidden)
+            - Lint, tests and Next.js build: passed
+
+            Before merging, make sure the compile server (MakeCodeGamesIngest) has been bumped to matching `pxt-arcade` ${{ steps.check.outputs.pxt-arcade }} / pxt-core ${{ steps.check.outputs.pxt }} so `/compilers/png-to-js` output matches this simulator.
+          branch: update-simulator/${{ steps.check.outputs.target }}
+          base: main
