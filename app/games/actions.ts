@@ -120,6 +120,33 @@ export async function listJams(): Promise<JamRow[]> {
 }
 
 type IdRow = { game_id: string };
+type ExcludedAuthorRow = { author_username: string };
+
+async function getExcludedAuthorUsernames(): Promise<Set<string>> {
+  const response = (await supabaseServer.from("excluded_authors").select("author_username")) as
+    | { data?: ExcludedAuthorRow[] }
+    | undefined;
+  const rows = response?.data || [];
+  return new Set(
+    rows
+      .map((r) => r.author_username)
+      .filter((u): u is string => typeof u === "string" && u.length > 0)
+  );
+}
+
+function buildAuthorVisibilityFilter(excluded: Set<string>): string {
+  const quoted = [...excluded]
+    .map((username) => `"${username.replace(/"/g, '""')}"`)
+    .join(",");
+  return `author_username.is.null,author_username.not.in.(${quoted})`;
+}
+
+function buildAlgoliaAuthorFilter(excluded: Set<string>): string | undefined {
+  if (excluded.size === 0) return undefined;
+  return [...excluded]
+    .map((username) => `NOT author_username:"${username.replace(/"/g, '\\"')}"`)
+    .join(" AND ");
+}
 
 /**
  * Maps a sort mode to the computed score column on the `game_scores` view.
@@ -141,6 +168,7 @@ function sortScoreColumn(sort: ListParams["sort"]): string {
 }
 
 export async function listGames({ category, jam, topic, sort, limit = 10 }: ListParams): Promise<GameWithStats[]> {
+  const excluded = await getExcludedAuthorUsernames();
   const fetchAll = (!category || category === "all") && !topic;
 
   // The "all" front page reads from the game_scores view and pushes
@@ -150,9 +178,11 @@ export async function listGames({ category, jam, topic, sort, limit = 10 }: List
   // subset in JS caused the front page to stop reflecting new games once
   // the table grew past that cap.
   if (fetchAll) {
-    const { data } = await supabaseServer
-      .from("game_scores")
-      .select("*")
+    let query = supabaseServer.from("game_scores").select("*");
+    if (excluded.size > 0) {
+      query = query.or(buildAuthorVisibilityFilter(excluded));
+    }
+    const { data } = await query
       .order(sortScoreColumn(sort), { ascending: false, nullsFirst: false })
       .limit(limit);
     return (data || []) as unknown as GameWithStats[];
@@ -186,21 +216,7 @@ export async function listGames({ category, jam, topic, sort, limit = 10 }: List
 
   if (gameIds.length === 0) return [];
 
-  const [{ data: gamesData }, { data: statsData }, { data: postsData }] = await Promise.all([
-    supabaseServer.from("games").select("*").in("id", gameIds),
-    supabaseServer.from("game_stats").select("game_id, clicks").in("game_id", gameIds),
-    supabaseServer
-      .from("game_forum_posts")
-      .select("game_id,forum_url,forum_topic_title,reply_count,view_count,post_cooked,reaction_count,link_clicks,posted_at")
-      .in("game_id", gameIds),
-  ]);
-
-  const gameRows = (gamesData || []) as unknown as GameWithStats[];
-  const merged = mergeGameData(
-    gameRows,
-    (statsData || []) as unknown as StatsRow[],
-    (postsData || []) as unknown as PostRow[]
-  );
+  const merged = await hydrateGames(gameIds, excluded);
 
   if (sort === "likes") {
     merged.sort((a, b) => b.likes - a.likes);
@@ -249,6 +265,7 @@ export async function listAllGames({
   page: number;
   limit?: number;
 }): Promise<{ games: GameWithStats[]; total: number }> {
+  const excluded = await getExcludedAuthorUsernames();
   const offset = (page - 1) * limit;
   const isOther = letter === "other";
 
@@ -257,6 +274,9 @@ export async function listAllGames({
     query = query.not("title", "imatches", "^[a-z]");
   } else {
     query = query.ilike("title", `${letter}%`);
+  }
+  if (excluded.size > 0) {
+    query = query.or(buildAuthorVisibilityFilter(excluded));
   }
   query = query.order("title").range(offset, offset + limit - 1);
 
@@ -292,13 +312,18 @@ export async function countAllLetters(): Promise<Record<string, number>> {
   }
   counts["other"] = 0;
 
+  const excluded = await getExcludedAuthorUsernames();
   const PAGE_SIZE = 1000;
   let offset = 0;
   for (;;) {
-    const { data } = await supabaseServer
+    let query = supabaseServer
       .from("games")
       .select("title")
       .range(offset, offset + PAGE_SIZE - 1);
+    if (excluded.size > 0) {
+      query = query.or(buildAuthorVisibilityFilter(excluded));
+    }
+    const { data } = await query;
     const titles = (data || []) as { title: string }[];
     if (titles.length === 0) break;
 
@@ -318,7 +343,7 @@ export async function countAllLetters(): Promise<Record<string, number>> {
   return counts;
 }
 
-async function hydrateGames(gameIds: string[]): Promise<GameWithStats[]> {
+async function hydrateGames(gameIds: string[], excluded?: Set<string>): Promise<GameWithStats[]> {
   if (gameIds.length === 0) return [];
 
   const [{ data: gamesData }, { data: statsData }, { data: postsData }] = await Promise.all([
@@ -335,7 +360,7 @@ async function hydrateGames(gameIds: string[]): Promise<GameWithStats[]> {
     gameRows,
     (statsData || []) as unknown as StatsRow[],
     (postsData || []) as unknown as PostRow[]
-  );
+  ).filter((g) => !excluded || !excluded.has(g.author_username ?? ""));
 
   const orderMap = new Map(gameIds.map((id, index) => [id, index]));
   merged.sort((a, b) => (orderMap.get(a.id) ?? 0) - (orderMap.get(b.id) ?? 0));
@@ -343,17 +368,24 @@ async function hydrateGames(gameIds: string[]): Promise<GameWithStats[]> {
   return merged;
 }
 
-async function searchGamesSupabase(query: string, limit?: number): Promise<GameWithStats[]> {
-  const { data: games } = await supabaseServer
-    .from("games")
-    .select("*")
-    .ilike("title", `%${query}%`);
+async function searchGamesSupabase(
+  query: string,
+  limit?: number,
+  excluded?: Set<string>
+): Promise<GameWithStats[]> {
+  excluded = excluded || (await getExcludedAuthorUsernames());
+
+  let dbQuery = supabaseServer.from("games").select("*").ilike("title", `%${query}%`);
+  if (excluded.size > 0) {
+    dbQuery = dbQuery.or(buildAuthorVisibilityFilter(excluded));
+  }
+  const { data: games } = await dbQuery;
 
   const gameRows = (games || []) as unknown as GameWithStats[];
   if (gameRows.length === 0) return [];
 
   const gameIds = gameRows.map((g) => g.id);
-  const merged = await hydrateGames(gameIds);
+  const merged = await hydrateGames(gameIds, excluded);
 
   const lowerQuery = query.toLowerCase();
   merged.sort((a, b) => {
@@ -373,9 +405,11 @@ export async function searchGamesAndTopics(
   const trimmed = query.trim();
   if (!trimmed) return { topics: [], games: [] };
 
+  const excluded = await getExcludedAuthorUsernames();
   const client = getAlgoliaSearchClient();
   if (client) {
     try {
+      const authorFilter = buildAlgoliaAuthorFilter(excluded);
       const { results } = (await client.search({
         requests: [
           {
@@ -388,6 +422,7 @@ export async function searchGamesAndTopics(
             indexName: GAMES_INDEX,
             query: trimmed,
             hitsPerPage: limit ?? 4,
+            ...(authorFilter ? { filters: authorFilter } : {}),
             attributesToRetrieve: [
               "objectID",
               "title",
@@ -414,7 +449,7 @@ export async function searchGamesAndTopics(
       }));
 
       const gameIds = (gameResult?.hits || []).map((hit) => String(hit.objectID));
-      const games = gameIds.length > 0 ? await hydrateGames(gameIds) : [];
+      const games = gameIds.length > 0 ? await hydrateGames(gameIds, excluded) : [];
 
       return { topics, games };
     } catch (error) {
@@ -422,7 +457,7 @@ export async function searchGamesAndTopics(
     }
   }
 
-  return { topics: [], games: await searchGamesSupabase(trimmed, limit) };
+  return { topics: [], games: await searchGamesSupabase(trimmed, limit, excluded) };
 }
 
 export async function searchGames(query: string): Promise<GameWithStats[]> {

@@ -28,6 +28,7 @@ async function setupGamesIndex(client: ReturnType<typeof getAlgoliaWriteClient>)
     indexName: GAMES_INDEX,
     indexSettings: {
       searchableAttributes: ["title", "description", "author_username"],
+      attributesForFaceting: ["author_username"],
       attributesToRetrieve: [
         "objectID",
         "title",
