@@ -6,7 +6,8 @@
  *
  * - Downloads the simulator to public/simulator/{version} (full + slim variant).
  * - Rewrites public/arcade-version.json to point at it.
- * - Removes the previously vendored public/simulator/{old} directory.
+ * - Old simulator directories are kept so pre-compiled arcade games that
+ *   still reference them continue to work.
  */
 
 import * as fs from 'fs'
@@ -54,7 +55,6 @@ console.log(`Wrote ${arcadeVersionPath}:`, arcadeVersion)
 if (previous?.simulator && previous.simulator !== version) {
   const oldDir = path.join(repoRoot, 'public', 'simulator', previous.simulator)
   if (fs.existsSync(oldDir)) {
-    fs.rmSync(oldDir, { recursive: true, force: true })
-    console.log(`Removed old simulator dir: ${oldDir}`)
+    console.log(`Kept old simulator dir for backwards compatibility: ${oldDir}`)
   }
 }
