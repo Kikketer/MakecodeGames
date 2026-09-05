@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import Script from "next/script";
 import GamePreview from "./game-preview";
 // Loads the shared `window.turnstile` global augmentation.
@@ -12,6 +12,13 @@ type Status = "idle" | "uploading" | "done" | "error";
 interface CompileResult {
   filename: string;
   url: string;
+}
+
+interface ArcadeVersion {
+  simulator: string;
+  simUrl: string;
+  cdnUrl: string;
+  targetVersion: string;
 }
 
 export default function JsCompiler() {
@@ -28,6 +35,16 @@ export default function JsCompiler() {
   const logRef = useRef<HTMLDivElement>(null);
   const turnstileContainerRef = useRef<HTMLDivElement>(null);
   const turnstileWidgetIdRef = useRef<string | null>(null);
+  const [arcadeVersion, setArcadeVersion] = useState<ArcadeVersion | null>(null);
+
+  useEffect(() => {
+    fetch("/arcade-version.json")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data) setArcadeVersion(data as ArcadeVersion);
+      })
+      .catch(() => {});
+  }, []);
 
   const handleTurnstileCallback = useCallback((token: string) => {
     setTurnstileToken(token);
@@ -84,6 +101,10 @@ export default function JsCompiler() {
       const form = new FormData();
       form.append("png", file);
       if (turnstileToken) form.append("turnstileToken", turnstileToken);
+      if (arcadeVersion) {
+        form.append("simUrl", `${window.location.origin}${arcadeVersion.simUrl}`);
+        form.append("cdnUrl", `${window.location.origin}${arcadeVersion.cdnUrl}`);
+      }
 
       appendLog([`Uploading ${file.name} (${(file.size / 1024).toFixed(1)} KB)...`]);
 
@@ -116,7 +137,7 @@ export default function JsCompiler() {
         resetTurnstile();
       }
     },
-    [status, turnstileToken, turnstileActive, resetTurnstile],
+    [status, turnstileToken, turnstileActive, resetTurnstile, arcadeVersion],
   );
 
   const handleFile = (file: File | null | undefined) => {
@@ -234,7 +255,7 @@ export default function JsCompiler() {
           </div>
 
           {showPreview && jsCode && (
-            <GamePreview code={jsCode} onError={handlePreviewError} version={null} />
+            <GamePreview code={jsCode} onError={handlePreviewError} version={arcadeVersion} />
           )}
         </div>
       )}

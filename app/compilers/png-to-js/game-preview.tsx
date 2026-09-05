@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { parseGameJsMeta } from "@/lib/parse-game-meta";
 
 interface ArcadeVersion {
@@ -19,25 +19,34 @@ interface GamePreviewProps {
 /**
  * Renders the compiled game.js inside the MakeCode Arcade simulator iframe.
  *
- * make-web ships a custom slim simulator variant under
- * `/simulator/{version}/slim.html`. MakecodeGames does not vendor the
- * simulator assets, so we point the iframe at the public MakeCode simulator
- * runner (`https://arcade.makecode.com/--simulator`) and drive it with the
- * same `run` postMessage protocol. The cdnUrl / targetVersion embedded in the
- * generated game.js (via `parseGameJsMeta`) tell the simulator which runtime
- * to load.
+ * The slim simulator variant vendored under `/simulator/{version}/slim.html`
+ * is the shell; the `cdnUrl` / `targetVersion` embedded in the generated
+ * game.js (via `parseGameJsMeta`) tell it which runtime to load.
  */
 export default function GamePreview({ code, version, onError }: GamePreviewProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [config, setConfig] = useState<ArcadeVersion | null>(null);
+
+  useEffect(() => {
+    if (version) return;
+    fetch("/arcade-version.json")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data) setConfig(data as ArcadeVersion);
+      })
+      .catch(() => {});
+  }, [version]);
+
+  const activeVersion = version ?? config;
 
   useEffect(() => {
     const iframe = iframeRef.current;
-    if (!iframe) return;
+    if (!iframe || !activeVersion) return;
 
-    const simulator = version?.simulator ?? version?.targetVersion ?? "";
+    const simulator = activeVersion.simulator ?? activeVersion.targetVersion;
     const defaults = {
-      cdnUrl: version?.cdnUrl ?? `https://cdn.makecode.com`,
-      targetVersion: version?.targetVersion ?? simulator,
+      cdnUrl: activeVersion.cdnUrl ?? `https://cdn.makecode.com`,
+      targetVersion: activeVersion.targetVersion ?? simulator,
     };
 
     const meta = parseGameJsMeta(code, defaults);
@@ -72,7 +81,7 @@ export default function GamePreview({ code, version, onError }: GamePreviewProps
     };
 
     window.addEventListener("message", handleMessage);
-    iframe.src = "https://arcade.makecode.com/--simulator";
+    iframe.src = activeVersion.simUrl ?? `/simulator/${simulator}/slim.html`;
 
     readyTimeout = setTimeout(() => {
       window.removeEventListener("message", handleMessage);
@@ -85,7 +94,17 @@ export default function GamePreview({ code, version, onError }: GamePreviewProps
       window.removeEventListener("message", handleMessage);
       iframe.src = "";
     };
-  }, [code, onError, version]);
+  }, [code, onError, activeVersion]);
+
+  if (!activeVersion) {
+    return (
+      <div className="aspect-[4/3] w-full overflow-hidden rounded-lg bg-black">
+        <div className="flex h-full w-full items-center justify-center text-xs text-makecode-tan">
+          Loading simulator…
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="aspect-[4/3] w-full overflow-hidden rounded-lg bg-black">
