@@ -148,6 +148,42 @@ function buildAlgoliaAuthorFilter(excluded: Set<string>): string | undefined {
     .join(" AND ");
 }
 
+type GameAuthorByTopicRow = {
+  forum_topic_id: number;
+  games?: { author_username: string | null } | null;
+};
+
+async function visibleTopicIds(topicIds: number[], excluded: Set<string>): Promise<Set<number>> {
+  if (topicIds.length === 0 || excluded.size === 0) return new Set(topicIds);
+
+  const { data } = await supabaseServer
+    .from("game_forum_posts")
+    .select("forum_topic_id, games(author_username)")
+    .in("forum_topic_id", topicIds);
+
+  const rows = (data || []) as unknown as GameAuthorByTopicRow[];
+  const authorsByTopic = new Map<number, Set<string>>();
+  for (const row of rows) {
+    const id = Number(row.forum_topic_id);
+    const author = row.games?.author_username ?? null;
+    let set = authorsByTopic.get(id);
+    if (!set) {
+      set = new Set();
+      authorsByTopic.set(id, set);
+    }
+    if (author) set.add(author);
+  }
+
+  const visible = new Set<number>();
+  for (const id of topicIds) {
+    const authors = authorsByTopic.get(id);
+    if (!authors || authors.size === 0 || [...authors].some((a) => !excluded.has(a))) {
+      visible.add(id);
+    }
+  }
+  return visible;
+}
+
 /**
  * Maps a sort mode to the computed score column on the `game_scores` view.
  * The view adds `sort_date` (coalesced posted_at/first_seen_at), `hot_score`
@@ -447,11 +483,18 @@ export async function searchGamesAndTopics(
         reply_count: Number(hit.reply_count ?? 0),
         view_count: Number(hit.view_count ?? 0),
       }));
+      const topicIds = topics.map((t) => t.forum_topic_id);
+      const visibleTopics = await visibleTopicIds(topicIds, excluded);
+      const filteredTopics = topics.filter((t) => visibleTopics.has(t.forum_topic_id));
 
-      const gameIds = (gameResult?.hits || []).map((hit) => String(hit.objectID));
+      const gameHits = (gameResult?.hits || []).filter((hit) => {
+        const author = hit.author_username ? String(hit.author_username) : null;
+        return !excluded.has(author ?? "");
+      });
+      const gameIds = gameHits.map((hit) => String(hit.objectID));
       const games = gameIds.length > 0 ? await hydrateGames(gameIds, excluded) : [];
 
-      return { topics, games };
+      return { topics: filteredTopics, games };
     } catch (error) {
       console.error("Algolia search failed, falling back to Supabase:", error);
     }
