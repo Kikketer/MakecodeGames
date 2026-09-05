@@ -44,24 +44,34 @@ async function setupGamesIndex(client: ReturnType<typeof getAlgoliaWriteClient>)
     },
   });
 
-  console.log("Fetching games from Supabase...");
-  const { data: games, error } = await supabaseServer
-    .from("games")
-    .select(GAME_FIELDS.join(","));
+  console.log("Fetching games and excluded authors from Supabase...");
+  const [{ data: games, error: gamesError }, { data: excludedAuthors, error: excludedError }] = await Promise.all([
+    supabaseServer.from("games").select(GAME_FIELDS.join(",")),
+    supabaseServer.from("excluded_authors").select("author_username"),
+  ]);
 
-  if (error) throw error;
+  if (gamesError) throw gamesError;
+  if (excludedError) throw excludedError;
+
+  const excludedUsernames = new Set(
+    ((excludedAuthors || []) as { author_username: string }[])
+      .map((row) => row.author_username)
+      .filter((username): username is string => typeof username === "string" && username.length > 0)
+  );
 
   const gameRows = ((games || []) as unknown) as Record<string, unknown>[];
 
-  const objects = gameRows.map((game) => ({
-    objectID: game.id as string,
-    title: game.title as string,
-    description: game.description as string | null,
-    author_username: game.author_username as string | null,
-    thumb_url: game.thumb_url as string,
-    game_url: game.game_url as string,
-    first_seen_at: new Date(game.first_seen_at as string).getTime(),
-  }));
+  const objects = gameRows
+    .filter((game) => !excludedUsernames.has((game.author_username as string | null | undefined) ?? ""))
+    .map((game) => ({
+      objectID: game.id as string,
+      title: game.title as string,
+      description: game.description as string | null,
+      author_username: game.author_username as string | null,
+      thumb_url: game.thumb_url as string,
+      game_url: game.game_url as string,
+      first_seen_at: new Date(game.first_seen_at as string).getTime(),
+    }));
 
   console.log(`Replacing ${objects.length} game records in Algolia...`);
   await client.replaceAllObjects({ indexName: GAMES_INDEX, objects });

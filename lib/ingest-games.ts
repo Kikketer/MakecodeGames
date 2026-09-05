@@ -70,6 +70,21 @@ async function upsertCategoriesStep(
   if (error) throw error;
 }
 
+async function isAuthorExcluded(authorUsername: string | null): Promise<boolean> {
+  if (!authorUsername) return false;
+  try {
+    const { data } = (await supabaseServer
+      .from("excluded_authors")
+      .select("author_username")
+      .eq("author_username", authorUsername)
+      .limit(1)) as { data?: { author_username: string }[] | null | undefined };
+    return Array.isArray(data) && data.length > 0;
+  } catch (error) {
+    console.error("Failed to check excluded authors:", error);
+    return false;
+  }
+}
+
 async function indexGame(gameId: string) {
   const client = getAlgoliaWriteClient();
   if (!client) return;
@@ -92,6 +107,11 @@ async function indexGame(gameId: string) {
     } | null;
 
     if (!game) return;
+
+    if (await isAuthorExcluded(game.author_username)) {
+      await client.deleteObject({ indexName: GAMES_INDEX, objectID: game.id });
+      return;
+    }
 
     await client.saveObject({
       indexName: GAMES_INDEX,
