@@ -5,7 +5,6 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { supabaseServer } from "@/lib/supabase-server";
 import { getUser } from "@/lib/auth";
-import { refreshGameReactions } from "@/lib/ingest-games";
 import { getAlgoliaSearchClient, GAMES_INDEX, FORUM_TOPICS_INDEX } from "@/lib/algolia";
 
 export type GameWithStats = {
@@ -536,11 +535,6 @@ export async function addLike(gameId: string) {
 export async function recordClick(gameId: string) {
   const user = await getUser().catch(() => null);
   await supabaseServer.from("game_clicks").insert({ game_id: gameId, user_id: user?.id || null });
-  try {
-    await refreshGameReactions(gameId);
-  } catch (error) {
-    console.error("Failed to refresh reactions:", error);
-  }
 }
 
 export async function signOut() {

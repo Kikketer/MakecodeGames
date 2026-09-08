@@ -4,13 +4,11 @@ import { addLike, listGames, listAllGames, countAllLetters, recordClick, searchG
 const mockSupabase = vi.hoisted(() => ({ from: vi.fn(), rpc: vi.fn() }));
 const mockGetUser = vi.hoisted(() => vi.fn());
 const mockRevalidatePath = vi.hoisted(() => vi.fn());
-const mockRefreshReactions = vi.hoisted(() => vi.fn());
 const mockGetAlgoliaSearchClient = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/supabase-server", () => ({ supabaseServer: mockSupabase }));
 vi.mock("@/lib/auth", () => ({ getUser: mockGetUser }));
 vi.mock("next/cache", () => ({ revalidatePath: mockRevalidatePath }));
-vi.mock("@/lib/ingest-games", () => ({ refreshGameReactions: mockRefreshReactions }));
 vi.mock("@/lib/algolia", () => ({
   getAlgoliaSearchClient: mockGetAlgoliaSearchClient,
   getAlgoliaWriteClient: vi.fn(),
@@ -98,7 +96,6 @@ describe("addLike", () => {
     mockSupabase.from = vi.fn();
     mockGetUser.mockReset();
     mockRevalidatePath.mockReset();
-    mockRefreshReactions.mockReset();
     mockGetAlgoliaSearchClient.mockReset();
   });
 
@@ -131,7 +128,6 @@ describe("listGames", () => {
     vi.clearAllMocks();
     mockSupabase.from = vi.fn((table: string) => makeBuilder(table, responses[table as keyof typeof responses]));
     mockGetUser.mockReset();
-    mockRefreshReactions.mockReset();
     mockGetAlgoliaSearchClient.mockReset();
   });
 
@@ -329,7 +325,6 @@ describe("searchGames", () => {
     vi.clearAllMocks();
     mockSupabase.from = vi.fn((table: string) => makeBuilder(table, searchResponses[table as keyof typeof searchResponses]));
     mockGetUser.mockReset();
-    mockRefreshReactions.mockReset();
     mockGetAlgoliaSearchClient.mockReset();
   });
 
@@ -373,7 +368,6 @@ describe("searchGamesAndTopics", () => {
     vi.clearAllMocks();
     mockSupabase.from = vi.fn((table: string) => makeBuilder(table, searchResponses[table as keyof typeof searchResponses]));
     mockGetUser.mockReset();
-    mockRefreshReactions.mockReset();
     mockGetAlgoliaSearchClient.mockReset();
   });
 
@@ -472,7 +466,6 @@ describe("listAllGames", () => {
     vi.clearAllMocks();
     mockSupabase.from = vi.fn((table: string) => makeBuilder(table, allGamesResponses[table as keyof typeof allGamesResponses]));
     mockGetUser.mockReset();
-    mockRefreshReactions.mockReset();
     mockGetAlgoliaSearchClient.mockReset();
   });
 
@@ -545,7 +538,6 @@ describe("countAllLetters", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetUser.mockReset();
-    mockRefreshReactions.mockReset();
     mockGetAlgoliaSearchClient.mockReset();
   });
 
@@ -594,27 +586,22 @@ describe("recordClick", () => {
     vi.clearAllMocks();
     mockSupabase.from = vi.fn((table: string) => makeBuilder(table, undefined));
     mockGetUser.mockReset();
-    mockRefreshReactions.mockReset();
     mockGetAlgoliaSearchClient.mockReset();
   });
 
-  it("records an anonymous click and refreshes reactions in the background", async () => {
+  it("records an anonymous click", async () => {
     mockGetUser.mockRejectedValue(new Error("no session"));
-    mockRefreshReactions.mockResolvedValue(undefined);
 
     await recordClick("game-1");
 
     expect(mockSupabase.from).toHaveBeenCalledWith("game_clicks");
-    expect(mockRefreshReactions).toHaveBeenCalledWith("game-1");
   });
 
-  it("still records a click even if reaction refresh fails", async () => {
+  it("records a click for a signed-out user", async () => {
     mockGetUser.mockResolvedValue(null);
-    mockRefreshReactions.mockRejectedValue(new Error("network"));
 
     await recordClick("game-2");
 
     expect(mockSupabase.from).toHaveBeenCalledWith("game_clicks");
-    expect(mockRefreshReactions).toHaveBeenCalledWith("game-2");
   });
 });
