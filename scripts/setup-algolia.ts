@@ -1,5 +1,6 @@
-import { getAlgoliaWriteClient, GAMES_INDEX, FORUM_TOPICS_INDEX } from "../lib/algolia";
+import { getAlgoliaWriteClient, GAMES_INDEX, FORUM_TOPICS_INDEX, EXTENSION_TOOLS_INDEX } from "../lib/algolia";
 import { supabaseServer } from "../lib/supabase-server";
+import { extensions } from "../content/extensions";
 
 const GAME_FIELDS = [
   "id",
@@ -148,6 +149,47 @@ async function setupTopicsIndex(client: ReturnType<typeof getAlgoliaWriteClient>
   console.log("Forum topics index ready.");
 }
 
+async function setupExtensionToolsIndex(client: ReturnType<typeof getAlgoliaWriteClient>) {
+  if (!client) throw new Error("Algolia write client is not configured");
+
+  console.log("Configuring extension tools index...");
+  await client.setSettings({
+    indexName: EXTENSION_TOOLS_INDEX,
+    indexSettings: {
+      searchableAttributes: [
+        "title",
+        "whatItDoes",
+        "problem",
+        "description",
+        "extensionDisplayName",
+      ],
+      attributesToRetrieve: ["owner", "repo", "slug", "title"],
+      typoTolerance: true,
+      queryType: "prefixLast",
+    },
+  });
+
+  console.log("Building extension tool catalog...");
+  const objects = extensions.flatMap((extension) =>
+    extension.tools.map((tool) => ({
+      objectID: `${extension.owner}/${extension.repo}/${tool.slug}`,
+      owner: extension.owner,
+      repo: extension.repo,
+      slug: tool.slug,
+      title: tool.title,
+      whatItDoes: tool.whatItDoes,
+      problem: tool.problem,
+      description: extension.description,
+      extensionDisplayName: extension.displayName,
+      group: tool.group,
+    })),
+  );
+
+  console.log(`Replacing ${objects.length} extension tool records in Algolia...`);
+  await client.replaceAllObjects({ indexName: EXTENSION_TOOLS_INDEX, objects });
+  console.log("Extension tools index ready.");
+}
+
 async function main() {
   const client = getAlgoliaWriteClient();
   if (!client) {
@@ -158,6 +200,7 @@ async function main() {
 
   await setupGamesIndex(client);
   await setupTopicsIndex(client);
+  await setupExtensionToolsIndex(client);
   console.log("Algolia setup complete.");
 }
 

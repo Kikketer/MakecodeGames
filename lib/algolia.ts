@@ -3,6 +3,7 @@ import type { SearchClient } from "algoliasearch";
 
 export const GAMES_INDEX = "games";
 export const FORUM_TOPICS_INDEX = "forum_topics";
+export const EXTENSION_TOOLS_INDEX = "extension_tools";
 
 function getClient(apiKeyEnv: string): SearchClient | null {
   const appId = process.env.ALGOLIA_APP_ID;

@@ -1,8 +1,8 @@
 "use server";
 
 import { extensions, getTool } from "@/content/extensions";
-import { generateJson } from "@/lib/extension-docs/gemini";
-import { verifyTurnstileToken } from "@/lib/turnstile";
+import type { ExtensionDoc, ExtensionTool } from "@/content/extensions";
+import { getAlgoliaSearchClient, EXTENSION_TOOLS_INDEX } from "@/lib/algolia";
 
 const MAX_QUERY_LENGTH = 400;
 const NO_MATCH_NOTE =
@@ -11,9 +11,9 @@ const NO_MATCH_NOTE =
 export interface ToolMatch {
   /** Composite key: owner/repo/slug */
   id: string;
-  /** Human-friendly tool title (re-attached from catalog, not from the model). */
+  /** Human-friendly tool title. */
   title: string;
-  /** One-sentence usage note from the model. */
+  /** Short description used in search results. */
   blurb: string;
   /** Link to the per-tool doc page. */
   docUrl: string;
@@ -30,138 +30,126 @@ export interface SearchResult {
   note?: string;
 }
 
-/** Shape returned by Gemini's structured output. */
-interface GeminiMatchResult {
-  matches: { id: string; blurb: string }[];
+function toMatch(tool: ExtensionTool, extension: ExtensionDoc): ToolMatch {
+  return {
+    id: `${extension.owner}/${extension.repo}/${tool.slug}`,
+    title: tool.title,
+    blurb: tool.whatItDoes,
+    docUrl: `/extensions/${extension.owner}/${extension.repo}/${tool.slug}`,
+    blockString: tool.blockString,
+    extensionDisplayName: extension.displayName,
+    example: tool.example,
+  };
 }
 
-/** Lean catalog entry sent to Gemini — only what the model needs to judge relevance. */
-interface LeanTool {
-  id: string;
-  title: string;
-  problem: string;
-  whatItDoes: string;
-}
+function localSearchExtensionTools(query: string): ToolMatch[] {
+  const lower = query.toLowerCase();
+  const terms = lower.split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return [];
 
-const RESPONSE_SCHEMA = {
-  type: "object",
-  properties: {
-    matches: {
-  type: "array",
-      items: {
-        type: "object",
-        properties: {
-          id: { type: "string" },
-          blurb: { type: "string" },
-        },
-        required: ["id", "blurb"],
-      },
-    },
-  },
-  required: ["matches"],
-};
+  const scored: { match: ToolMatch; score: number }[] = [];
+  for (const extension of extensions) {
+    for (const tool of extension.tools) {
+      const haystack = [
+        tool.title,
+        tool.problem,
+        tool.whatItDoes,
+        tool.blockString,
+        extension.displayName,
+        extension.description,
+      ]
+        .join(" ")
+        .toLowerCase();
 
-function buildLeanCatalog(): LeanTool[] {
-  return extensions.flatMap((ext) =>
-    ext.tools.map((tool) => ({
-      id: `${ext.owner}/${ext.repo}/${tool.slug}`,
-      title: tool.title,
-      problem: tool.problem,
-      whatItDoes: tool.whatItDoes,
-    })),
-  );
-}
+      let score = 0;
+      for (const term of terms) {
+        if (haystack.includes(term)) score++;
+      }
 
-function buildSystemPrompt(catalog: LeanTool[]): string {
-  return `You are an extension search assistant for MakeCode Arcade.
-Your ONLY job is to match the user's description to available extension tools.
+      if (score > 0) {
+        scored.push({ match: toMatch(tool, extension), score });
+      }
+    }
+  }
 
-Rules:
-- Return 1-3 tools that genuinely solve what the user is asking for, or return zero matches.
-- NEVER answer the user's question directly. NEVER provide information, code, jokes, advice, or conversation.
-- If the user's request is not about finding a MakeCode Arcade extension tool or block (e.g. "tell me a joke", "what is the weather", "write me a poem"), return zero matches.
-- Do not stretch to find tangential matches. Only return a tool if it clearly addresses what the user described.
-- For each match, write a one-sentence blurb explaining how the tool helps with the user's specific problem.
-
-Available tools:
-${JSON.stringify(catalog)}`;
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, 10).map((s) => s.match);
 }
 
 /**
  * Search extension tools by natural-language description.
- * Sends the full lean catalog to Gemini in a single shot and returns
- * structured matches with re-attached real fields (no hallucinated links/names).
+ *
+ * Uses Algolia when configured, and falls back to a simple local text
+ * search over the static tool catalog. This keeps the search working in
+ * development or if Algolia is not set up.
  */
 export async function searchExtensionTools(
   query: string,
-  turnstileToken: string,
 ): Promise<SearchResult> {
-  // 1. Verify Turnstile (skipped on localhost when secret is absent)
-  const verified = await verifyTurnstileToken(turnstileToken);
-  if (!verified) {
-    return { matches: [], note: "Verification failed. Please try again." };
-  }
-
-  // 2. Trim and validate query
   const trimmed = query.trim();
   if (!trimmed) {
     return { matches: [] };
   }
   const cappedQuery = trimmed.slice(0, MAX_QUERY_LENGTH);
 
-  // 3. Build lean catalog
-  const catalog = buildLeanCatalog();
-  if (catalog.length === 0) {
-    return { matches: [], note: NO_MATCH_NOTE };
+  const client = getAlgoliaSearchClient();
+  if (client) {
+    try {
+      const { results } = (await client.search({
+        requests: [
+          {
+            indexName: EXTENSION_TOOLS_INDEX,
+            query: cappedQuery,
+            hitsPerPage: 10,
+            attributesToRetrieve: ["owner", "repo", "slug", "title"],
+          },
+        ],
+      })) as unknown as {
+        results: Array<{
+          hits: Array<
+            Record<string, unknown> & {
+              owner?: string;
+              repo?: string;
+              slug?: string;
+            }
+          >;
+        }>;
+      };
+
+      const hits = results[0]?.hits ?? [];
+      const matches: ToolMatch[] = [];
+      for (const hit of hits) {
+        const owner = String(hit.owner ?? "");
+        const repo = String(hit.repo ?? "");
+        const slug = String(hit.slug ?? "");
+        if (!owner || !repo || !slug) continue;
+
+        const tool = getTool(owner, repo, slug);
+        if (!tool) continue;
+
+        const extension = extensions.find(
+          (e) => e.owner === owner && e.repo === repo,
+        );
+        if (!extension) continue;
+
+        matches.push(toMatch(tool, extension));
+      }
+
+      if (matches.length === 0) {
+        return { matches: [], note: NO_MATCH_NOTE };
+      }
+      return { matches };
+    } catch (error) {
+      console.error(
+        "Algolia extension search failed, falling back to local search:",
+        error,
+      );
+    }
   }
 
-  // 4. Call Gemini with structured output
-  const result = await generateJson<GeminiMatchResult>(
-    {
-      contents: [
-        {
-          role: "user",
-          parts: [{ text: cappedQuery }],
-        },
-      ],
-      systemInstruction: {
-        role: "user",
-        parts: [{ text: buildSystemPrompt(catalog) }],
-      },
-      generationConfig: {
-        temperature: 0.2,
-        maxOutputTokens: 2048,
-      },
-    },
-    { responseSchema: RESPONSE_SCHEMA },
-  );
-
-  // 5. Re-attach real fields by id (composite key: owner/repo/slug)
-  const matches: ToolMatch[] = [];
-  for (const geminiMatch of result.matches ?? []) {
-    const [owner, repo, slug] = geminiMatch.id.split("/");
-    if (!owner || !repo || !slug) continue;
-
-    const tool = getTool(owner, repo, slug);
-    if (!tool) continue;
-
-    const extension = extensions.find((e) => e.owner === owner && e.repo === repo);
-    if (!extension) continue;
-
-    matches.push({
-      id: geminiMatch.id,
-      title: tool.title,
-      blurb: geminiMatch.blurb,
-      docUrl: `/extensions/${owner}/${repo}/${slug}`,
-      blockString: tool.blockString,
-      extensionDisplayName: extension.displayName,
-      example: tool.example,
-    });
-  }
-
+  const matches = localSearchExtensionTools(cappedQuery);
   if (matches.length === 0) {
     return { matches: [], note: NO_MATCH_NOTE };
   }
-
   return { matches };
 }
