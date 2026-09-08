@@ -209,7 +209,35 @@ async function normalizeMakeCode(urlId: string): Promise<MakeCodeMeta | null> {
   };
 }
 
-async function upsertGame(shareUrl: string, meta: MakeCodeMeta, author: { user_id: number; username: string }) {
+/**
+ * The oldest known forum post for a game is its canonical post: whoever
+ * posted a share link first is the game's owner. Returns null when the
+ * game has no posts with a known posted_at (nothing to compare against).
+ */
+async function getEarliestPostedAt(gameId: string): Promise<string | null> {
+  const { data, error } = await supabaseServer
+    .from("game_forum_posts")
+    .select("posted_at")
+    .eq("game_id", gameId)
+    .not("posted_at", "is", null)
+    .order("posted_at", { ascending: true })
+    .limit(1);
+  if (error) throw error;
+  const row = (data || [])[0] as { posted_at: string | null } | undefined;
+  return row?.posted_at ?? null;
+}
+
+function isEarlier(candidate: string | undefined, current: string | null): boolean {
+  if (!candidate || !current) return false;
+  return new Date(candidate).getTime() < new Date(current).getTime();
+}
+
+async function upsertGame(
+  shareUrl: string,
+  meta: MakeCodeMeta,
+  author: { user_id: number; username: string },
+  postedAt?: string
+) {
   "use step";
   const thumbUrl = `https://cdn.makecode.com/api/${meta.id}/thumb`;
   const { data: existing } = await supabaseServer
@@ -219,21 +247,38 @@ async function upsertGame(shareUrl: string, meta: MakeCodeMeta, author: { user_i
     .limit(1);
 
   if (existing && existing.length > 0) {
-    const { error } = await supabaseServer
-      .from("games")
-      .update({
-        makecode_id: meta.id,
-        shortid: meta.shortid,
-        persist_id: meta.persistId,
-        title: meta.name,
-        description: meta.description,
-        thumb_url: thumbUrl,
-        last_seen_at: new Date().toISOString(),
-      })
-      .eq("id", existing[0].id);
+    const gameId = existing[0].id as string;
+    const update: {
+      makecode_id: string;
+      shortid?: string;
+      persist_id?: string;
+      title: string;
+      description?: string;
+      thumb_url: string;
+      last_seen_at: string;
+      author_forum_id?: number;
+      author_username?: string;
+    } = {
+      makecode_id: meta.id,
+      shortid: meta.shortid,
+      persist_id: meta.persistId,
+      title: meta.name,
+      description: meta.description,
+      thumb_url: thumbUrl,
+      last_seen_at: new Date().toISOString(),
+    };
+
+    // Oldest post wins ownership; the current record may itself be a re-post.
+    const earliest = await getEarliestPostedAt(gameId);
+    if (isEarlier(postedAt, earliest)) {
+      update.author_forum_id = author.user_id;
+      update.author_username = author.username;
+    }
+
+    const { error } = await supabaseServer.from("games").update(update).eq("id", gameId);
     if (error) throw error;
-    void indexGame(existing[0].id as string);
-    return existing[0].id as string;
+    void indexGame(gameId);
+    return gameId;
   }
 
   const { data: inserted, error } = await supabaseServer
@@ -343,7 +388,12 @@ export async function ingestPost(
   const meta = await normalizeMakeCode(urlId);
   if (!meta) return null;
 
-  const gameId = await upsertGame(shareUrl, meta, { user_id: post.user_id, username: post.username });
+  const gameId = await upsertGame(
+    shareUrl,
+    meta,
+    { user_id: post.user_id, username: post.username },
+    post.created_at
+  );
   const categoryName = categoryMap.get(topic.category_id) || "";
   await upsertForumPost(
     gameId,

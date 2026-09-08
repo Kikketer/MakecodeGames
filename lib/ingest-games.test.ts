@@ -221,6 +221,84 @@ describe("ingestPost", () => {
       posted_at: null,
     });
   });
+
+  function existingGameChain(earliestPostedAt: string | null) {
+    const gameUpdates: unknown[] = [];
+    const postUpserts: unknown[] = [];
+    mockSupabase.from = vi.fn((table: string) => {
+      const calls: string[] = [];
+      const chain: Record<string, unknown> = {
+        then: (resolve: (value: unknown) => void) => {
+          if (table === "games" && calls.includes("update")) return resolve({ error: null });
+          if (table === "games") return resolve({ data: [{ id: "game-1" }] });
+          if (table === "game_forum_posts" && calls.includes("upsert")) return resolve({ error: null });
+          if (table === "game_forum_posts") {
+            return resolve({ data: earliestPostedAt ? [{ posted_at: earliestPostedAt }] : [], error: null });
+          }
+          return resolve({ data: null, error: null });
+        },
+      };
+      for (const method of ["select", "eq", "not", "order", "limit", "single", "insert"]) {
+        chain[method] = () => { calls.push(method); return chain; };
+      }
+      chain.update = (values: unknown) => { calls.push("update"); gameUpdates.push(values); return chain; };
+      chain.upsert = (values: unknown) => { calls.push("upsert"); postUpserts.push(values); return chain; };
+      return chain;
+    });
+    return { gameUpdates, postUpserts };
+  }
+
+  const topic = { id: 555, title: "A game topic", category_id: 5, posts_count: 2, views: 10 };
+  const categoryMap = new Map([[5, "Games"]]);
+  const rePost = (created_at?: string) => ({
+    id: 999,
+    post_number: 4,
+    cooked: '<p><a href="https://arcade.makecode.com/12345">game</a></p>',
+    user_id: 2,
+    username: "reposter",
+    created_at,
+  });
+
+  it("transfers ownership to the poster when the re-found link was posted earlier than any known post", async () => {
+    const { gameUpdates, postUpserts } = existingGameChain("2026-08-02T11:00:00.000Z");
+    mockFetch.mockResolvedValue(jsonResponse({ kind: "script", id: "abc-123", name: "Test Game" }));
+
+    const gameId = await ingestPost(
+      "https://arcade.makecode.com/12345",
+      rePost("2026-07-01T00:00:00.000Z"),
+      topic,
+      categoryMap
+    );
+
+    expect(gameId).toBe("game-1");
+    expect(gameUpdates).toHaveLength(1);
+    expect(gameUpdates[0]).toMatchObject({ author_forum_id: 2, author_username: "reposter" });
+    expect(postUpserts).toHaveLength(1);
+    expect(postUpserts[0]).toMatchObject({ game_id: "game-1", forum_post_id: 999 });
+  });
+
+  it("keeps the current owner but still records the post when the re-found link is newer", async () => {
+    const { gameUpdates, postUpserts } = existingGameChain("2026-07-01T00:00:00.000Z");
+    mockFetch.mockResolvedValue(jsonResponse({ kind: "script", id: "abc-123", name: "Test Game" }));
+
+    await ingestPost("https://arcade.makecode.com/12345", rePost("2026-08-02T11:00:00.000Z"), topic, categoryMap);
+
+    expect(gameUpdates).toHaveLength(1);
+    expect(gameUpdates[0]).not.toHaveProperty("author_forum_id");
+    expect(gameUpdates[0]).not.toHaveProperty("author_username");
+    expect(postUpserts).toHaveLength(1);
+  });
+
+  it("keeps the current owner when the post date is unknown on either side", async () => {
+    const noKnownDates = existingGameChain(null);
+    mockFetch.mockResolvedValue(jsonResponse({ kind: "script", id: "abc-123", name: "Test Game" }));
+    await ingestPost("https://arcade.makecode.com/12345", rePost("2026-07-01T00:00:00.000Z"), topic, categoryMap);
+    expect(noKnownDates.gameUpdates[0]).not.toHaveProperty("author_forum_id");
+
+    const noPostDate = existingGameChain("2026-08-02T11:00:00.000Z");
+    await ingestPost("https://arcade.makecode.com/12345", rePost(undefined), topic, categoryMap);
+    expect(noPostDate.gameUpdates[0]).not.toHaveProperty("author_forum_id");
+  });
 });
 
 describe("ingestCategoryTopics", () => {
