@@ -18,13 +18,28 @@ describe("SiteNav", () => {
     expect(link.getAttribute("href")).toBe("/arcade");
   });
 
-  it("renders all four nav tabs", () => {
+  it("renders all active nav tabs", () => {
     mockPathname = "/games";
     render(<SiteNav />);
     expect(screen.getByRole("link", { name: "Games" })).toBeDefined();
     expect(screen.getByRole("link", { name: "Extensions" })).toBeDefined();
     expect(screen.getByRole("link", { name: "Compilers" })).toBeDefined();
+    expect(screen.getByRole("link", { name: "Utilities" })).toBeDefined();
     // expect(screen.getByRole("link", { name: "One Minute Arcade" })).toBeDefined();
+  });
+
+  it("renders a link to the Utilities tab", () => {
+    mockPathname = "/games";
+    render(<SiteNav />);
+    const link = screen.getByRole("link", { name: "Utilities" });
+    expect(link.getAttribute("href")).toBe("/utilities");
+  });
+
+  it("highlights the utilities tab when on /utilities/png-to-img", () => {
+    mockPathname = "/utilities/png-to-img";
+    render(<SiteNav />);
+    const utilitiesLink = screen.getByRole("link", { name: "Utilities" });
+    expect(utilitiesLink.className).toContain("bg-makecode-red");
   });
 
   it("renders a link to the Compilers tab", () => {
