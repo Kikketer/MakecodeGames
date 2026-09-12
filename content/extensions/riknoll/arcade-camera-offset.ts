@@ -5,7 +5,7 @@ export const arcadeCameraOffset: ExtensionDoc = {
   repo: "arcade-camera-offset",
   displayName: "Camera Offset",
   packageSlug: "github:riknoll/arcade-camera-offset",
-  description: "Customize how the camera follows sprites in MakeCode Arcade by adding horizontal and vertical offsets.",
+  description: "Lets the game camera follow a sprite with a custom horizontal and vertical pixel offset so players can see ahead.",
   tools: [
     {
       slug: "camera-follow-sprite-with-offset-x-offset-y",
@@ -14,16 +14,16 @@ export const arcadeCameraOffset: ExtensionDoc = {
       blockString: "camera follow sprite $sprite with offset x $offsetx offset y $offsety",
       group: "Camera",
       weight: 0,
-      problem: "You want the camera to follow your player, but you want them positioned off-center so players can see further ahead in a platformer or racing game.",
-      whatItDoes: "Makes the game camera follow a sprite while applying a horizontal (X) and vertical (Y) pixel offset instead of locking directly to the center of the screen.",
+      problem: "You want the player to see further ahead when moving across a platformer level instead of always being trapped dead in the center of the screen.",
+      whatItDoes: "Positions the camera to track a sprite with a specified horizontal and vertical pixel offset from the sprite's center.",
       parameters: [
-        { name: "sprite", type: "Sprite", default: "mySprite", meaning: "The sprite that the camera will track." },
-        { name: "offsetx", type: "number", default: "0", meaning: "The horizontal distance in pixels to shift the camera focus from the sprite center (positive moves focus right, negative moves left)." },
-        { name: "offsety", type: "number", default: "0", meaning: "The vertical distance in pixels to shift the camera focus from the sprite center (positive moves focus down, negative moves up)." },
+        { name: "sprite", type: "Sprite", default: "mySprite", meaning: "The sprite the camera will follow." },
+        { name: "offsetx", type: "number", meaning: "The horizontal pixel offset from the sprite (positive shifts the camera right)." },
+        { name: "offsety", type: "number", meaning: "The vertical pixel offset from the sprite (positive shifts the camera down)." },
       ],
       example: `let mySprite = sprites.create(img\`.\`, SpriteKind.Player)
 controller.moveSprite(mySprite)
-cameraOffsetScene.cameraFollowWithOffset(mySprite, 20, 0)`,
+cameraOffsetScene.cameraFollowWithOffset(mySprite, 30, -20)`,
     }
   ],
 };
