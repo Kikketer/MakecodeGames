@@ -3,6 +3,7 @@
 import { useState, useRef, useCallback } from "react";
 import Script from "next/script";
 import { compileNativeAction } from "./actions";
+import { usbCartSupported, writeUsbCart } from "./usb-cart";
 import ArchInstructions from "./arch-instructions";
 // Loads the shared `window.turnstile` global augmentation.
 import "@/lib/turnstile-global";
@@ -33,6 +34,7 @@ export default function NativeCompiler() {
   const [result, setResult] = useState<CompileResult | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [arch, setArch] = useState<Arch>("x86-64");
+  const [usbCart, setUsbCart] = useState(false);
   const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
@@ -121,13 +123,31 @@ export default function NativeCompiler() {
         setResult({ filename: res.filename, url });
         setStatus("done");
         resetTurnstile();
+
+        if (usbCart && !isWindows) {
+          const cartName = res.filename
+            .replace(/\.(tar\.gz|zip)$/i, "")
+            .replace(/-(arm64|x86-64|win64)$/i, "");
+          appendLog(["Pick the USB stick's root folder to write the cartridge…"]);
+          try {
+            const cartLog = await writeUsbCart(buffer, cartName);
+            appendLog(cartLog);
+          } catch (err: unknown) {
+            const aborted = err instanceof DOMException && err.name === "AbortError";
+            appendLog([
+              aborted
+                ? "USB write cancelled — the download still works, or use install/pack-usb.sh."
+                : `USB write failed: ${err instanceof Error ? err.message : String(err)}`,
+            ]);
+          }
+        }
       } catch (err: unknown) {
         appendLog([`Network error: ${err instanceof Error ? err.message : String(err)}`]);
         setStatus("error");
         resetTurnstile();
       }
     },
-    [status, arch, turnstileToken, turnstileActive, resetTurnstile],
+    [status, arch, usbCart, turnstileToken, turnstileActive, resetTurnstile],
   );
 
   const handleFile = (file: File | null | undefined) => {
@@ -187,6 +207,18 @@ export default function NativeCompiler() {
             <option value="win64">x86-64 — Windows</option>
           </select>
           <ArchInstructions arch={arch} />
+          {usbCartSupported() && arch !== "win64" && (
+            <label className="flex items-center gap-2 font-sans text-sm font-bold text-makecode-tan">
+              <input
+                type="checkbox"
+                checked={usbCart}
+                onChange={(e) => setUsbCart(e.target.checked)}
+                disabled={busy}
+                className="h-4 w-4 accent-makecode-cyan disabled:opacity-50"
+              />
+              Write to a USB cartridge when done (Creation Station Arcade)
+            </label>
+          )}
         </div>
       )}
 
