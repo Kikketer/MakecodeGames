@@ -125,18 +125,15 @@ export default function NativeCompiler() {
         resetTurnstile();
 
         if (usbCart && !isWindows) {
-          const cartName = res.filename
-            .replace(/\.(tar\.gz|zip)$/i, "")
-            .replace(/-(arm64|x86-64|win64)$/i, "");
           appendLog(["Pick the USB stick's root folder to write the cartridge…"]);
           try {
-            const cartLog = await writeUsbCart(buffer, cartName);
+            const cartLog = await writeUsbCart(buffer, res.filename);
             appendLog(cartLog);
           } catch (err: unknown) {
             const aborted = err instanceof DOMException && err.name === "AbortError";
             appendLog([
               aborted
-                ? "USB write cancelled — the download still works, or use install/pack-usb.sh."
+                ? "USB write cancelled — the download still works; copy it to the stick manually."
                 : `USB write failed: ${err instanceof Error ? err.message : String(err)}`,
             ]);
           }
