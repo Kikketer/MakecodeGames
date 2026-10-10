@@ -93,11 +93,14 @@ export async function proxyCompileNative(
   if (!png || !(png instanceof Blob)) {
     return { ok: false, error: "No PNG file uploaded", log: [] };
   }
-  upstreamForm.append("png", png, png instanceof File ? png.name : "upload.png");
+  // arch must come BEFORE the file part: @fastify/multipart's req.file()
+  // only exposes fields received before the file — anything after is
+  // silently dropped and the server would default to x86-64.
   upstreamForm.append("arch", arch);
+  upstreamForm.append("png", png, png instanceof File ? png.name : "upload.png");
 
   try {
-    const upstream = await fetch(`${base}/api/compile-native`, {
+    const upstream = await fetch(`${base}/api/compile-native?arch=${arch}`, {
       method: "POST",
       body: upstreamForm,
       headers: ingestAuthHeaders(),
