@@ -24,7 +24,15 @@ describe("SiteNav", () => {
     expect(screen.getByRole("link", { name: "Games" })).toBeDefined();
     expect(screen.getByRole("link", { name: "Extensions" })).toBeDefined();
     expect(screen.getByRole("link", { name: "Compilers" })).toBeDefined();
+    expect(screen.getByRole("link", { name: "Image Converters" })).toBeDefined();
     // expect(screen.getByRole("link", { name: "One Minute Arcade" })).toBeDefined();
+  });
+
+  it("renders a link to the Image Converters tab", () => {
+    mockPathname = "/games";
+    render(<SiteNav />);
+    const link = screen.getByRole("link", { name: "Image Converters" });
+    expect(link.getAttribute("href")).toBe("/image-converters");
   });
 
   it("renders a link to the Compilers tab", () => {
