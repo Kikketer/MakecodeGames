@@ -135,7 +135,7 @@ describe("proxyCompileNative", () => {
       // Verify the arch was appended to the upstream form.
       const body = init.body as FormData;
       expect(body.get("arch")).toBe("arm64");
-      expect(url).toBe("https://example.com/api/compile-native");
+      expect(url).toBe("https://example.com/api/compile-native?arch=arm64");
       return new Response(
         JSON.stringify({
           ok: true,
