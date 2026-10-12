@@ -270,17 +270,24 @@ export default function PngToImgConverter() {
 
         <div className={infoClass}>
           <p className="leading-relaxed">
-            The <code className={codeClass}>img</code> and{" "}
-            <code className={codeClass}>.jres</code> outputs are useful when
-            importing into Visual Studio Code. There are no MakeCode blocks that
-            convert <code className={codeClass}>img</code> to{" "}
-            <code className={codeClass}>.jres</code> for you, so you need to copy
-            both outputs into the right files: paste the{" "}
-            <code className={codeClass}>img</code> literal into{" "}
-            <code className={codeClass}>images.g.ts</code> and the{" "}
-            <code className={codeClass}>.jres</code> entry into{" "}
-            <code className={codeClass}>images.g.jres</code>. This pattern has
-            worked best for embedding the image properly in the game.
+            To bring the <code className={codeClass}>img</code> into your game
+            in the MakeCode editor:
+          </p>
+          <ol className="list-decimal space-y-1 pl-5 leading-relaxed">
+            <li>Copy the img string.</li>
+            <li>
+              Switch to JavaScript and type{" "}
+              <code className={codeClass}>let theImage = </code> then paste.
+            </li>
+            <li>
+              Switch back to Blocks — you&apos;ll see the new image and can save
+              it from there.
+            </li>
+          </ol>
+          <p className="leading-relaxed">
+            The <code className={codeClass}>.jres</code> output is only needed
+            for Visual Studio Code projects — paste it into{" "}
+            <code className={codeClass}>images.g.jres</code>.
           </p>
         </div>
 
