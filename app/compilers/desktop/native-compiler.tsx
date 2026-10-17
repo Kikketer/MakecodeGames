@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import Script from "next/script";
 import { compileNativeAction } from "./actions";
 import ArchInstructions from "./arch-instructions";
@@ -34,6 +34,8 @@ export default function NativeCompiler() {
   const [dragOver, setDragOver] = useState(false);
   const [arch, setArch] = useState<Arch>("x86-64");
   const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [scriptLoaded, setScriptLoaded] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const turnstileContainerRef = useRef<HTMLDivElement>(null);
@@ -45,7 +47,11 @@ export default function NativeCompiler() {
   const handleTurnstileExpired = useCallback(() => setTurnstileToken(null), []);
   const handleTurnstileError = useCallback(() => setTurnstileToken(null), []);
 
-  const handleScriptLoad = useCallback(() => {
+  const handleScriptLoad = useCallback(() => setScriptLoaded(true), []);
+
+  useEffect(() => {
+    if (!turnstileActive || !scriptLoaded || !pendingFile) return;
+    if (turnstileWidgetIdRef.current !== null) return;
     if (!TURNSTILE_SITE_KEY || !turnstileContainerRef.current) return;
     if (typeof window === "undefined" || !window.turnstile) return;
     turnstileWidgetIdRef.current = window.turnstile.render(
@@ -58,7 +64,15 @@ export default function NativeCompiler() {
         theme: "dark",
       },
     );
-  }, [TURNSTILE_SITE_KEY, handleTurnstileCallback, handleTurnstileExpired, handleTurnstileError]);
+  }, [
+    turnstileActive,
+    scriptLoaded,
+    pendingFile,
+    TURNSTILE_SITE_KEY,
+    handleTurnstileCallback,
+    handleTurnstileExpired,
+    handleTurnstileError,
+  ]);
 
   const appendLog = (lines: string[]) => {
     setLog((prev) => {
@@ -74,6 +88,16 @@ export default function NativeCompiler() {
     setTurnstileToken(null);
     if (turnstileWidgetIdRef.current && window.turnstile) {
       window.turnstile.reset(turnstileWidgetIdRef.current);
+    }
+  }, []);
+
+  const removeTurnstileWidget = useCallback(() => {
+    setTurnstileToken(null);
+    if (turnstileWidgetIdRef.current && window.turnstile) {
+      try {
+        window.turnstile.remove(turnstileWidgetIdRef.current);
+      } catch {}
+      turnstileWidgetIdRef.current = null;
     }
   }, []);
 
@@ -137,7 +161,11 @@ export default function NativeCompiler() {
       setStatus("error");
       return;
     }
-    void compile(file);
+    if (result) URL.revokeObjectURL(result.url);
+    setStatus("idle");
+    setLog([]);
+    setResult(null);
+    setPendingFile(file);
   };
 
   const onDrop = (e: React.DragEvent) => {
@@ -151,8 +179,9 @@ export default function NativeCompiler() {
     setStatus("idle");
     setLog([]);
     setResult(null);
+    setPendingFile(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
-    resetTurnstile();
+    removeTurnstileWidget();
   };
 
   const busy = status === "uploading";
@@ -161,18 +190,14 @@ export default function NativeCompiler() {
   return (
     <div className="flex w-full max-w-xl flex-col gap-6">
       {turnstileActive && (
-        <>
-          <Script
-            src="https://challenges.cloudflare.com/turnstile/v0/api.js"
-            strategy="afterInteractive"
-            onLoad={handleScriptLoad}
-          />
-          <div ref={turnstileContainerRef} className="min-h-[65px]" />
-        </>
+        <Script
+          src="https://challenges.cloudflare.com/turnstile/v0/api.js"
+          strategy="afterInteractive"
+          onLoad={handleScriptLoad}
+        />
       )}
 
-      {turnstileReady && (
-        <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-2">
           <label className="font-sans text-sm font-bold text-makecode-tan">
             Target architecture
           </label>
@@ -186,36 +211,54 @@ export default function NativeCompiler() {
             <option value="arm64">ARM64 / aarch64 — Linux (Raspberry Pi 3/4/5, Pi Zero 2 W)</option>
             <option value="win64">x86-64 — Windows</option>
           </select>
-          <ArchInstructions arch={arch} />
-        </div>
+        <ArchInstructions arch={arch} />
+      </div>
+
+      <div
+        className={[
+          "cursor-pointer rounded-xl border-4 border-dashed border-makecode-black bg-makecode-white p-10 text-center transition-colors",
+          dragOver ? "border-makecode-cyan bg-makecode-cyan" : "hover:border-makecode-teal",
+          busy ? "pointer-events-none opacity-50" : "",
+        ].join(" ")}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={onDrop}
+        onClick={() => !busy && fileInputRef.current?.click()}
+      >
+        <p className="font-sans text-sm font-bold text-makecode-brown">
+          {busy
+            ? "Compiling…"
+            : pendingFile
+              ? pendingFile.name
+              : "Drop a .png file here, or click to browse"}
+        </p>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".png,image/png"
+          className="hidden"
+          onChange={(e) => handleFile(e.target.files?.[0])}
+        />
+      </div>
+
+      {turnstileActive && pendingFile && (
+        <div
+          ref={turnstileContainerRef}
+          className={status === "done" ? "hidden" : "min-h-[65px]"}
+        />
       )}
 
-      {turnstileReady && (
-        <div
-          className={[
-            "cursor-pointer rounded-xl border-4 border-dashed border-makecode-black bg-makecode-white p-10 text-center transition-colors",
-            dragOver ? "border-makecode-cyan bg-makecode-cyan" : "hover:border-makecode-teal",
-            busy ? "pointer-events-none opacity-50" : "",
-          ].join(" ")}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragOver(true);
-          }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={onDrop}
-          onClick={() => !busy && fileInputRef.current?.click()}
+      {pendingFile && status !== "done" && (
+        <button
+          onClick={() => void compile(pendingFile)}
+          disabled={busy || !turnstileReady}
+          className="rounded-lg border-4 border-makecode-black bg-makecode-cyan py-2 px-4 font-sans text-sm font-bold text-makecode-black transition-colors hover:bg-makecode-yellow disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <p className="font-sans text-sm font-bold text-makecode-brown">
-            {busy ? "Compiling…" : "Drop a .png file here, or click to browse"}
-          </p>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".png,image/png"
-            className="hidden"
-            onChange={(e) => handleFile(e.target.files?.[0])}
-          />
-        </div>
+          {busy ? "Compiling…" : "Compile"}
+        </button>
       )}
 
       {log.length > 0 && (
