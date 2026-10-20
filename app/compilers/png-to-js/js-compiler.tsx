@@ -31,6 +31,8 @@ export default function JsCompiler() {
   const [showPreview, setShowPreview] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [scriptLoaded, setScriptLoaded] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const turnstileContainerRef = useRef<HTMLDivElement>(null);
@@ -52,7 +54,11 @@ export default function JsCompiler() {
   const handleTurnstileExpired = useCallback(() => setTurnstileToken(null), []);
   const handleTurnstileError = useCallback(() => setTurnstileToken(null), []);
 
-  const handleScriptLoad = useCallback(() => {
+  const handleScriptLoad = useCallback(() => setScriptLoaded(true), []);
+
+  useEffect(() => {
+    if (!turnstileActive || !scriptLoaded || !pendingFile) return;
+    if (turnstileWidgetIdRef.current !== null) return;
     if (!TURNSTILE_SITE_KEY || !turnstileContainerRef.current) return;
     if (typeof window === "undefined" || !window.turnstile) return;
     turnstileWidgetIdRef.current = window.turnstile.render(
@@ -65,7 +71,15 @@ export default function JsCompiler() {
         theme: "dark",
       },
     );
-  }, [TURNSTILE_SITE_KEY, handleTurnstileCallback, handleTurnstileExpired, handleTurnstileError]);
+  }, [
+    turnstileActive,
+    scriptLoaded,
+    pendingFile,
+    TURNSTILE_SITE_KEY,
+    handleTurnstileCallback,
+    handleTurnstileExpired,
+    handleTurnstileError,
+  ]);
 
   const appendLog = (lines: string[]) => {
     setLog((prev) => {
@@ -81,6 +95,16 @@ export default function JsCompiler() {
     setTurnstileToken(null);
     if (turnstileWidgetIdRef.current && window.turnstile) {
       window.turnstile.reset(turnstileWidgetIdRef.current);
+    }
+  }, []);
+
+  const removeTurnstileWidget = useCallback(() => {
+    setTurnstileToken(null);
+    if (turnstileWidgetIdRef.current && window.turnstile) {
+      try {
+        window.turnstile.remove(turnstileWidgetIdRef.current);
+      } catch {}
+      turnstileWidgetIdRef.current = null;
     }
   }, []);
 
@@ -147,7 +171,13 @@ export default function JsCompiler() {
       setStatus("error");
       return;
     }
-    void compile(file);
+    if (result) URL.revokeObjectURL(result.url);
+    setStatus("idle");
+    setLog([]);
+    setResult(null);
+    setJsCode("");
+    setShowPreview(false);
+    setPendingFile(file);
   };
 
   const onDrop = (e: React.DragEvent) => {
@@ -163,8 +193,9 @@ export default function JsCompiler() {
     setResult(null);
     setJsCode("");
     setShowPreview(false);
+    setPendingFile(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
-    resetTurnstile();
+    removeTurnstileWidget();
   };
 
   const handlePreviewError = (message: string) => {
@@ -178,42 +209,58 @@ export default function JsCompiler() {
   return (
     <div className="flex w-full max-w-3xl flex-col gap-6">
       {turnstileActive && (
-        <>
-          <Script
-            src="https://challenges.cloudflare.com/turnstile/v0/api.js"
-            strategy="afterInteractive"
-            onLoad={handleScriptLoad}
-          />
-          <div ref={turnstileContainerRef} className="min-h-[65px]" />
-        </>
+        <Script
+          src="https://challenges.cloudflare.com/turnstile/v0/api.js"
+          strategy="afterInteractive"
+          onLoad={handleScriptLoad}
+        />
       )}
 
-      {turnstileReady && (
+      <div
+        className={[
+          "cursor-pointer rounded-xl border-4 border-dashed border-makecode-black bg-makecode-white p-10 text-center transition-colors",
+          dragOver ? "border-makecode-cyan bg-makecode-cyan" : "hover:border-makecode-teal",
+          busy ? "pointer-events-none opacity-50" : "",
+        ].join(" ")}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={onDrop}
+        onClick={() => !busy && fileInputRef.current?.click()}
+      >
+        <p className="font-sans text-sm font-bold text-makecode-brown">
+          {busy
+            ? "Compiling…"
+            : pendingFile
+              ? pendingFile.name
+              : "Drop a .png file here, or click to browse"}
+        </p>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".png,image/png"
+          className="hidden"
+          onChange={(e) => handleFile(e.target.files?.[0])}
+        />
+      </div>
+
+      {turnstileActive && pendingFile && (
         <div
-          className={[
-            "cursor-pointer rounded-xl border-4 border-dashed border-makecode-black bg-makecode-white p-10 text-center transition-colors",
-            dragOver ? "border-makecode-cyan bg-makecode-cyan" : "hover:border-makecode-teal",
-            busy ? "pointer-events-none opacity-50" : "",
-          ].join(" ")}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragOver(true);
-          }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={onDrop}
-          onClick={() => !busy && fileInputRef.current?.click()}
+          ref={turnstileContainerRef}
+          className={status === "done" ? "hidden" : "min-h-[65px]"}
+        />
+      )}
+
+      {pendingFile && status !== "done" && (
+        <button
+          onClick={() => void compile(pendingFile)}
+          disabled={busy || !turnstileReady}
+          className="rounded-lg border-4 border-makecode-black bg-makecode-cyan py-2 px-4 font-sans text-sm font-bold text-makecode-black transition-colors hover:bg-makecode-yellow disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <p className="font-sans text-sm font-bold text-makecode-brown">
-            {busy ? "Compiling…" : "Drop a .png file here, or click to browse"}
-          </p>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".png,image/png"
-            className="hidden"
-            onChange={(e) => handleFile(e.target.files?.[0])}
-          />
-        </div>
+          {busy ? "Compiling…" : "Compile"}
+        </button>
       )}
 
       {log.length > 0 && (
