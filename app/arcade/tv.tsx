@@ -43,6 +43,7 @@ export default function Tv({ duration, gameName }: TvProps) {
       <Script
         src="/arcade/arcade.js"
         strategy="afterInteractive"
+        type="module"
       />
     </div>
   );

@@ -1,100 +1,125 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { searchExtensionTools } from "./actions";
 
-const mockGenerateJson = vi.hoisted(() => vi.fn());
-const mockVerifyTurnstile = vi.hoisted(() => vi.fn());
+const mockSearch = vi.hoisted(() => vi.fn());
+const mockGetAlgoliaSearchClient = vi.hoisted(() =>
+  vi.fn<() => { search: typeof mockSearch } | null>(() => null),
+);
 
-vi.mock("@/lib/extension-docs/gemini", () => ({
-  generateJson: mockGenerateJson,
-  DEFAULT_MODEL: "gemini-flash-latest",
-}));
-vi.mock("@/lib/turnstile", () => ({
-  verifyTurnstileToken: mockVerifyTurnstile,
-  isTurnstileEnabled: vi.fn(() => false),
+vi.mock("@/lib/algolia", () => ({
+  getAlgoliaSearchClient: mockGetAlgoliaSearchClient,
+  EXTENSION_TOOLS_INDEX: "extension_tools",
 }));
 
 beforeEach(() => {
   vi.resetAllMocks();
-  // Default: Turnstile skipped (localhost behavior — no secret)
-  mockVerifyTurnstile.mockResolvedValue(true);
+  mockGetAlgoliaSearchClient.mockReturnValue(null);
 });
 
 describe("searchExtensionTools", () => {
-  it("returns no matches and no Gemini call for empty/whitespace query", async () => {
-    const result = await searchExtensionTools("   ", "");
+  it("returns no matches for an empty/whitespace query", async () => {
+    const result = await searchExtensionTools("   ");
     expect(result.matches).toEqual([]);
     expect(result.note).toBeUndefined();
-    expect(mockGenerateJson).not.toHaveBeenCalled();
+    expect(mockGetAlgoliaSearchClient).not.toHaveBeenCalled();
   });
 
-  it("returns verification-failed note when Turnstile rejects the token", async () => {
-    mockVerifyTurnstile.mockResolvedValue(false);
-    const result = await searchExtensionTools("distance between two sprites", "bad-token");
-    expect(result.matches).toEqual([]);
-    expect(result.note).toContain("Verification failed");
-    expect(mockGenerateJson).not.toHaveBeenCalled();
+  it("falls back to a local text search when Algolia is not configured", async () => {
+    const result = await searchExtensionTools("distance between two sprites");
+
+    expect(result.matches.length).toBeGreaterThan(0);
+    expect(result.matches.map((m) => m.id)).toContain(
+      "jwunderl/arcade-sprite-util/distance-between",
+    );
   });
 
-  it("surfaces a matching tool and re-attaches real fields by id", async () => {
-    mockGenerateJson.mockResolvedValue({
-      matches: [
-        { id: "jwunderl/arcade-sprite-util/distance-between", blurb: "Use this to get the pixel distance between two sprites." },
+  it("uses Algolia and re-attaches real tool fields when configured", async () => {
+    mockGetAlgoliaSearchClient.mockReturnValue({ search: mockSearch });
+    mockSearch.mockResolvedValue({
+      results: [
+        {
+          hits: [
+            {
+              owner: "jwunderl",
+              repo: "arcade-sprite-util",
+              slug: "distance-between",
+              title: "distance between",
+            },
+          ],
+        },
       ],
     });
 
-    const result = await searchExtensionTools("calculate the distance from one sprite to another", "");
+    const result = await searchExtensionTools("distance");
 
     expect(result.matches).toHaveLength(1);
     const match = result.matches[0];
     expect(match.id).toBe("jwunderl/arcade-sprite-util/distance-between");
-    expect(match.title).toBe("distance between"); // re-attached from catalog, not from model
-    expect(match.blurb).toBe("Use this to get the pixel distance between two sprites.");
-    expect(match.docUrl).toBe("/extensions/jwunderl/arcade-sprite-util/distance-between");
+    expect(match.title).toBe("distance between");
+    expect(match.docUrl).toBe(
+      "/extensions/jwunderl/arcade-sprite-util/distance-between",
+    );
+    expect(match.blurb).toBeTruthy();
     expect(match.extensionDisplayName).toBe("Sprite Utils");
-    expect(match.blockString).toContain("distance between");
+
+    expect(mockSearch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requests: [
+          expect.objectContaining({
+            indexName: "extension_tools",
+            query: "distance",
+            hitsPerPage: 10,
+          }),
+        ],
+      }),
+    );
   });
 
-  it("returns the no-match note for off-topic queries (zero matches from model)", async () => {
-    mockGenerateJson.mockResolvedValue({ matches: [] });
+  it("returns the no-match note when Algolia returns no hits", async () => {
+    mockGetAlgoliaSearchClient.mockReturnValue({ search: mockSearch });
+    mockSearch.mockResolvedValue({
+      results: [{ hits: [] }],
+    });
 
-    const result = await searchExtensionTools("tell me a joke", "");
+    const result = await searchExtensionTools("tell me a joke");
 
     expect(result.matches).toEqual([]);
     expect(result.note).toContain("didn't find an extension");
   });
 
-  it("drops model-returned ids that don't resolve to a real tool (hallucination guard)", async () => {
-    mockGenerateJson.mockResolvedValue({
-      matches: [
-        { id: "jwunderl/arcade-sprite-util/distance-between", blurb: "Real tool." },
-        { id: "fake/fake-repo/fake-tool", blurb: "Hallucinated tool." },
+  it("drops Algolia hits that do not resolve to a real tool", async () => {
+    mockGetAlgoliaSearchClient.mockReturnValue({ search: mockSearch });
+    mockSearch.mockResolvedValue({
+      results: [
+        {
+          hits: [
+            {
+              owner: "fake",
+              repo: "fake-repo",
+              slug: "fake-tool",
+              title: "fake tool",
+            },
+          ],
+        },
       ],
     });
 
-    const result = await searchExtensionTools("something", "");
-
-    expect(result.matches).toHaveLength(1);
-    expect(result.matches[0].id).toBe("jwunderl/arcade-sprite-util/distance-between");
-  });
-
-  it("truncates queries longer than 400 characters before sending to Gemini", async () => {
-    mockGenerateJson.mockResolvedValue({ matches: [] });
-    const longQuery = "a".repeat(500);
-
-    await searchExtensionTools(longQuery, "");
-
-    const sentText = mockGenerateJson.mock.calls[0][0].contents[0].parts[0].text;
-    expect(sentText.length).toBe(400);
-  });
-
-  it("returns the no-match note when all model matches are hallucinated", async () => {
-    mockGenerateJson.mockResolvedValue({
-      matches: [{ id: "fake/fake/fake", blurb: "Nope" }],
-    });
-
-    const result = await searchExtensionTools("something", "");
+    const result = await searchExtensionTools("something");
 
     expect(result.matches).toEqual([]);
     expect(result.note).toContain("didn't find an extension");
+  });
+
+  it("truncates queries longer than 400 characters before searching", async () => {
+    mockGetAlgoliaSearchClient.mockReturnValue({ search: mockSearch });
+    mockSearch.mockResolvedValue({
+      results: [{ hits: [] }],
+    });
+    const longQuery = "a".repeat(500);
+
+    await searchExtensionTools(longQuery);
+
+    const sentQuery = mockSearch.mock.calls[0][0].requests[0].query;
+    expect(sentQuery.length).toBe(400);
   });
 });

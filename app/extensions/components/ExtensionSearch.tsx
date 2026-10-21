@@ -1,41 +1,16 @@
 "use client";
 
-import { useState, useRef, useCallback, useTransition, useEffect, type ReactNode } from "react";
+import { useState, useCallback, useTransition, useEffect, type ReactNode } from "react";
 import Link from "next/link";
-import Script from "next/script";
 import { searchExtensionTools, type SearchResult } from "../actions";
 
 const MAX_QUERY_LENGTH = 400;
-const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
-
-/** Minimal type for the Cloudflare Turnstile global injected by the script. */
-interface TurnstileGlobal {
-  render: (
-    container: HTMLElement,
-    options: {
-      sitekey: string;
-      callback?: (token: string) => void;
-      "expired-callback"?: () => void;
-      "error-callback"?: () => void;
-      theme?: "light" | "dark" | "auto";
-    },
-  ) => string;
-}
-
-declare global {
-  interface Window {
-    turnstile?: TurnstileGlobal;
-  }
-}
 
 export function ExtensionSearch({ children }: { children: ReactNode }) {
   const [query, setQuery] = useState("");
   const [result, setResult] = useState<SearchResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
-  const turnstileWidgetIdRef = useRef<string | null>(null);
-  const turnstileContainerRef = useRef<HTMLDivElement>(null);
 
   // SPA back-button: when results arrive, push a state entry so the browser
   // back button clears results and re-shows the general list (no URL change).
@@ -71,46 +46,15 @@ export function ExtensionSearch({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const handleTurnstileCallback = useCallback((token: string) => {
-    setTurnstileToken(token);
-  }, []);
-
-  const handleTurnstileExpired = useCallback(() => {
-    setTurnstileToken(null);
-  }, []);
-
-  const handleTurnstileError = useCallback(() => {
-    setTurnstileToken(null);
-  }, []);
-
-  const handleScriptLoad = useCallback(() => {
-    if (!TURNSTILE_SITE_KEY || !turnstileContainerRef.current) return;
-    if (typeof window === "undefined" || !window.turnstile) return;
-
-    turnstileWidgetIdRef.current = window.turnstile.render(
-      turnstileContainerRef.current,
-      {
-        sitekey: TURNSTILE_SITE_KEY,
-        callback: handleTurnstileCallback,
-        "expired-callback": handleTurnstileExpired,
-        "error-callback": handleTurnstileError,
-        theme: "dark",
-      },
-    );
-  }, [handleTurnstileCallback, handleTurnstileExpired, handleTurnstileError]);
-
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmed = query.trim();
     if (!trimmed) return;
 
-    // If Turnstile is enabled, require a token before submitting
-    if (TURNSTILE_SITE_KEY && !turnstileToken) return;
-
     setError(null);
     startTransition(async () => {
       try {
-        const res = await searchExtensionTools(trimmed, turnstileToken ?? "");
+        const res = await searchExtensionTools(trimmed);
         showResults(res);
       } catch {
         setError("Something went wrong. Please try again.");
@@ -118,18 +62,8 @@ export function ExtensionSearch({ children }: { children: ReactNode }) {
     });
   }
 
-  const turnstileReady = !TURNSTILE_SITE_KEY || !!turnstileToken;
-
   return (
     <div className="flex flex-col gap-4">
-      {TURNSTILE_SITE_KEY && (
-        <Script
-          src="https://challenges.cloudflare.com/turnstile/v0/api.js"
-          strategy="afterInteractive"
-          onLoad={handleScriptLoad}
-        />
-      )}
-
       <form onSubmit={handleSubmit} className="flex flex-col gap-3">
         <div className="flex">
           <input
@@ -143,16 +77,12 @@ export function ExtensionSearch({ children }: { children: ReactNode }) {
           />
           <button
             type="submit"
-            disabled={!query.trim() || pending || !turnstileReady}
+            disabled={!query.trim() || pending}
             className="border-4 border-l-0 border-makecode-black bg-makecode-cyan px-6 py-3 font-sans text-base font-bold text-makecode-black hover:bg-makecode-yellow disabled:opacity-50"
           >
             {pending ? "Searching…" : "Search"}
           </button>
         </div>
-
-        {TURNSTILE_SITE_KEY && (
-          <div ref={turnstileContainerRef} className="min-h-[65px]" />
-        )}
       </form>
 
       {error && (

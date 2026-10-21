@@ -1,6 +1,6 @@
 {
-  "simulator": "4.1.6",
-  "simUrl": "/simulator/4.1.6/slim.html",
-  "cdnUrl": "/simulator/4.1.6/cdn",
-  "targetVersion": "4.1.6"
+  "simulator": "4.2.1",
+  "simUrl": "/simulator/4.2.1/slim.html",
+  "cdnUrl": "/simulator/4.2.1/cdn",
+  "targetVersion": "4.2.1"
 }
