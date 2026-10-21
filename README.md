@@ -46,7 +46,7 @@ This project is not developed, affiliated with, or endorsed by Microsoft, the ow
 - `pnpm lint` – run ESLint
 - `pnpm test` – run the test suite with Vitest
 
-The `scripts/` directory also contains one-off maintenance scripts (e.g. `backfill-forum-posts.ts`, `setup-algolia.ts`), and `workflows/ingest.ts` powers the recurring ingest of forum jams/games into Supabase and Algolia.
+The `scripts/` directory also contains one-off maintenance scripts (e.g. `setup-algolia.ts`). The recurring forum ingest lives in the separate [MakeCodeGamesIngest](https://github.com/Kikketer/MakeCodeGamesIngest) server (`INGEST_URL`).
 
 ## Contributing
 

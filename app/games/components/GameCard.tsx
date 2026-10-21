@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import Image from "next/image";
 import { GameWithStats } from "@/app/games/actions";
 import { recordClick } from "@/app/games/actions";
 import { LikeControl } from "./LikeControl";
@@ -24,12 +23,10 @@ export function GameCard({ game }: { game: GameWithStats }) {
         {failed ? (
           <div className="flex h-full items-center justify-center font-sans text-xs text-makecode-brown">No preview</div>
         ) : (
-          <Image
+          <img
             src={game.thumb_url}
             alt={game.title}
-            fill
-            sizes="256px"
-            className="object-cover"
+            className="absolute inset-0 h-full w-full object-cover"
             onError={() => setFailed(true)}
           />
         )}

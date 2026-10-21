@@ -1,4 +1,7 @@
 import type { ExtensionDoc, ExtensionTool } from "@/content/extensions/types";
+import { raycastingPxtExtension } from "@/content/extensions/The-Code-Zone/Raycasting-pxt-extension";
+import { arcadeTilemapAStar } from "@/content/extensions/jwunderl/arcade-tilemap-a-star";
+import { pxtImageMorph } from "@/content/extensions/UnicycleDumpTruck/pxt-image-morph";
 import { tilemappath } from "@/content/extensions/UnsignedArduino/TilemapPath";
 import { arcadeOverworld } from "@/content/extensions/riknoll/arcade-overworld";
 import { retrofx } from "@/content/extensions/CrzLe0723/RetroFx";
@@ -13,7 +16,10 @@ export const extensions: ExtensionDoc[] = [
   arcadeSpriteUtil,
   arcadeSplitScreen,
   arcadeCameraOffset,
+  raycastingPxtExtension,
+  arcadeTilemapAStar,
   spriteWalls,
+  pxtImageMorph,
   tilemappath,
   arcadeOverworld,
   retrofx,

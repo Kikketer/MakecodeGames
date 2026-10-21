@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useRef, useTransition, useMemo } from "react";
-import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { GameWithStats, ForumTopic, searchGamesAndTopics, recordClick } from "@/app/games/actions";
 
@@ -26,12 +25,10 @@ function DropdownThumb({ src, alt }: { src: string; alt: string }) {
 
   return (
     <div className="relative h-8 w-10 shrink-0 overflow-hidden bg-makecode-tan">
-      <Image
+      <img
         src={src}
         alt={alt}
-        fill
-        sizes="40px"
-        className="object-cover"
+        className="absolute inset-0 h-full w-full object-cover"
         onError={() => setFailed(true)}
       />
     </div>

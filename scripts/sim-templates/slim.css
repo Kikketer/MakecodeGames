@@ -1,0 +1,36 @@
+body {
+  background: #000;
+  overflow: hidden;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  place-content: center;
+  height: 100dvh;
+  width: 100dvw;
+}
+
+#wrap {
+  position: fixed;
+  top: 0; right: 0; bottom: 0; left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.game-player, .game-embed {
+  width: 100%; height: 100%;
+  display: flex; align-items: center; justify-content: center;
+}
+
+/* Hide ALL the UI elements we don't want */
+#wrap { display: none !important; }
+
+/* Hide Safari mute button — audio handled by parent page */
+#safari-mute-button-outer, .safari-mute-button { display: none !important; }
+
+#game-screen {
+  image-rendering: pixelated;
+  aspect-ratio: 4/3;
+  height: 100dvh;
+  outline: none;
+}
