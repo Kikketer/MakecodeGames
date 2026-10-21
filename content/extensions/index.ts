@@ -1,4 +1,5 @@
 import type { ExtensionDoc, ExtensionTool } from "@/content/extensions/types";
+import { arcadeShader } from "@/content/extensions/riknoll/arcade-shader";
 import { raycastingPxtExtension } from "@/content/extensions/The-Code-Zone/Raycasting-pxt-extension";
 import { arcadeTilemapAStar } from "@/content/extensions/jwunderl/arcade-tilemap-a-star";
 import { pxtImageMorph } from "@/content/extensions/UnicycleDumpTruck/pxt-image-morph";
@@ -19,6 +20,7 @@ export const extensions: ExtensionDoc[] = [
   raycastingPxtExtension,
   arcadeTilemapAStar,
   spriteWalls,
+  arcadeShader,
   pxtImageMorph,
   tilemappath,
   arcadeOverworld,
