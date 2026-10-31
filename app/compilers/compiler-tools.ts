@@ -12,6 +12,13 @@ export interface CompilerTool {
  */
 export const COMPILER_TOOLS: CompilerTool[] = [
   {
+    id: "repo-to-png",
+    title: "GitHub Repo to PNG",
+    description:
+      "Generate a MakeCode Arcade project PNG straight from a public GitHub repo URL — no MakeCode editor import needed. Feed the PNG into any of the other compilers below.",
+    href: "/compilers/repo-to-png",
+  },
+  {
     id: "desktop",
     title: "PNG to Desktop",
     description:
