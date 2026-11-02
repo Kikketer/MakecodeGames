@@ -18,6 +18,13 @@ export const CONVERTER_TOOLS: ConverterTool[] = [
     href: "/image-converters/png-to-img",
   },
   {
+    id: "img-to-png",
+    title: "img to PNG",
+    description:
+      "Paste a MakeCode Arcade img`…` literal and download it as a PNG. Choose the default 16-color palette or paste a pxt.json palette, with a live pixel preview.",
+    href: "/image-converters/img-to-png",
+  },
+  {
     id: "img-to-jres",
     title: "img to .jres",
     description:
