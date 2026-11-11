@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import NativeCompiler from "./native-compiler";
+import NativeCompiler, { type Arch } from "./native-compiler";
 
 export const metadata: Metadata = {
   title: "PNG → Native Executable — MakeCode Games",
@@ -11,7 +11,16 @@ export const metadata: Metadata = {
 // Native builds on the Chromebook (4 GB RAM) can take several minutes.
 export const maxDuration = 300;
 
-export default function DesktopPage() {
+const ARCHES: Arch[] = ["x86-64", "arm64", "win64"];
+
+interface Props {
+  searchParams: Promise<{ arch?: string }>;
+}
+
+export default async function DesktopPage({ searchParams }: Props) {
+  const { arch } = await searchParams;
+  const initialArch = ARCHES.find((a) => a === arch) ?? "x86-64";
+
   return (
     <main className="mx-auto w-full max-w-4xl flex-1 px-6 py-8">
       <div className="flex flex-col gap-6">
@@ -41,7 +50,7 @@ export default function DesktopPage() {
             compiler and run the game in a browser.
           </p>
         </div>
-        <NativeCompiler />
+        <NativeCompiler initialArch={initialArch} />
       </div>
     </main>
   );
