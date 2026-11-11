@@ -162,10 +162,10 @@ export default function NativeCompiler({ arch }: { arch: Arch }) {
 
       {turnstile.widget}
 
-      {pendingFile && status !== "done" && (
+      {status !== "done" && (
         <button
-          onClick={() => void compile(pendingFile)}
-          disabled={busy || !turnstile.ready}
+          onClick={() => pendingFile && void compile(pendingFile)}
+          disabled={busy || !pendingFile || !turnstile.ready}
           className="rounded-lg border-4 border-makecode-black bg-makecode-cyan py-2 px-4 font-sans text-sm font-bold text-makecode-black transition-colors hover:bg-makecode-yellow disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busy ? "Compiling…" : "Compile"}
