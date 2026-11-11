@@ -1,14 +1,14 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { COMPILER_TOOLS } from "./compiler-tools";
+import { COMPILER_TOOLS, type CompilerIcon } from "./compiler-tools";
 
 export const metadata: Metadata = {
   title: "Compilers — MakeCode Games",
   description:
-    "Convert MakeCode Arcade PNG exports into Raspberry Pi ELF binaries, native desktop executables, or standalone JavaScript.",
+    "Convert MakeCode Arcade PNG exports into native Linux (x86 or ARM) and Windows executables, Raspberry Pi ELF binaries, or JavaScript for Chromium arcade cabinets.",
 };
 
-function ToolIcon({ id }: { id: string }) {
+function ToolIcon({ id }: { id: CompilerIcon }) {
   const common = "h-7 w-7";
   switch (id) {
     case "elf":
@@ -44,6 +44,41 @@ function ToolIcon({ id }: { id: string }) {
         >
           <rect x="3" y="4" width="18" height="12" rx="2" />
           <path d="M8 21h8M12 16v5" />
+        </svg>
+      );
+    case "arm":
+      return (
+        <svg
+          className={common}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <rect x="6" y="6" width="12" height="12" rx="1" />
+          <rect x="9" y="9" width="6" height="6" />
+          <path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4" />
+        </svg>
+      );
+    case "windows":
+      return (
+        <svg
+          className={common}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <rect x="3" y="3" width="8" height="8" />
+          <rect x="13" y="3" width="8" height="8" />
+          <rect x="3" y="13" width="8" height="8" />
+          <rect x="13" y="13" width="8" height="8" />
         </svg>
       );
     case "repo-to-png":
@@ -109,8 +144,9 @@ export default function CompilersPage() {
           Compile Your Game
         </h1>
         <p className="max-w-2xl font-sans text-lg text-makecode-tan">
-          Turn a MakeCode Arcade PNG export into a Raspberry Pi binary, a native
-          desktop executable, or a standalone JavaScript file.
+          Turn a MakeCode Arcade PNG export into something your arcade cabinet
+          (or computer) can run. Pick the compiler that matches your setup —
+          each one links to the guide for installing and running it.
         </p>
       </section>
 
@@ -121,7 +157,7 @@ export default function CompilersPage() {
             className="relative flex w-full items-center gap-5 border-4 border-makecode-black bg-makecode-blue p-4 shadow-[4px_4px_0_#000000] transition hover:border-makecode-cyan focus-within:ring-2 focus-within:ring-makecode-yellow"
           >
             <div className="flex h-16 w-16 shrink-0 items-center justify-center border-4 border-makecode-black bg-makecode-white text-makecode-black">
-              <ToolIcon id={tool.id} />
+              <ToolIcon id={tool.icon} />
             </div>
             <div className="flex flex-1 flex-col">
               <div className="flex items-center justify-between gap-2">
@@ -139,6 +175,25 @@ export default function CompilersPage() {
                 </Link>
               </div>
               <p className="font-sans text-sm text-white">{tool.description}</p>
+              <p className="mt-1 font-sans text-xs text-makecode-tan">
+                <span className="font-bold">Output:</span> {tool.output}
+              </p>
+              {tool.docs.length > 0 && (
+                <p className="relative z-10 mt-1 flex flex-wrap gap-x-3 font-sans text-xs">
+                  <span className="font-bold text-makecode-tan">Setup guides:</span>
+                  {tool.docs.map((doc) => (
+                    <a
+                      key={doc.href}
+                      href={doc.href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-bold text-makecode-cyan hover:underline"
+                    >
+                      {doc.label}
+                    </a>
+                  ))}
+                </p>
+              )}
             </div>
           </article>
         ))}

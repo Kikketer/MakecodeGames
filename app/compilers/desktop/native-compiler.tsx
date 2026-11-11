@@ -9,7 +9,7 @@ import "@/lib/turnstile-global";
 import { useTurnstileEnabled, turnstileSiteKey } from "@/lib/turnstile-client";
 
 type Status = "idle" | "uploading" | "done" | "error";
-type Arch = "x86-64" | "arm64" | "win64";
+export type Arch = "x86-64" | "arm64" | "win64";
 
 interface CompileResult {
   filename: string;
@@ -25,14 +25,14 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
   return bytes.buffer as ArrayBuffer;
 }
 
-export default function NativeCompiler() {
+export default function NativeCompiler({ initialArch = "x86-64" }: { initialArch?: Arch }) {
   const turnstileActive = useTurnstileEnabled();
   const TURNSTILE_SITE_KEY = turnstileSiteKey();
   const [status, setStatus] = useState<Status>("idle");
   const [log, setLog] = useState<string[]>([]);
   const [result, setResult] = useState<CompileResult | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [arch, setArch] = useState<Arch>("x86-64");
+  const [arch, setArch] = useState<Arch>(initialArch);
   const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [scriptLoaded, setScriptLoaded] = useState(false);
@@ -208,7 +208,7 @@ export default function NativeCompiler() {
             className="rounded-lg border-4 border-makecode-black bg-white p-2 font-sans text-sm font-bold text-makecode-black focus:outline-none disabled:opacity-50"
           >
             <option value="x86-64">x86-64 — Linux (Intel/AMD)</option>
-            <option value="arm64">ARM64 / aarch64 — Linux (Raspberry Pi 3/4/5, Pi Zero 2 W)</option>
+            <option value="arm64">ARM64 / aarch64 — Linux (Raspberry Pi 3 or less, Pi Zero 2 W)</option>
             <option value="win64">x86-64 — Windows</option>
           </select>
         <ArchInstructions arch={arch} />
