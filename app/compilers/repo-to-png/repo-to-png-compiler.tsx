@@ -1,10 +1,7 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
-import Script from "next/script";
-// Loads the shared `window.turnstile` global augmentation.
-import "@/lib/turnstile-global";
-import { useTurnstileEnabled, turnstileSiteKey } from "@/lib/turnstile-client";
+import { useState, useRef, useCallback } from "react";
+import { useTurnstile } from "@/lib/use-turnstile";
 
 type Status = "idle" | "working" | "done" | "error";
 
@@ -16,46 +13,13 @@ interface PngResult {
 }
 
 export default function RepoToPng() {
-  const turnstileActive = useTurnstileEnabled();
-  const TURNSTILE_SITE_KEY = turnstileSiteKey();
+  const turnstile = useTurnstile();
   const [status, setStatus] = useState<Status>("idle");
   const [log, setLog] = useState<string[]>([]);
   const [result, setResult] = useState<PngResult | null>(null);
   const [repoUrl, setRepoUrl] = useState("");
   const [ref, setRef] = useState("");
-  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
-  const [scriptLoaded, setScriptLoaded] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
-  const turnstileContainerRef = useRef<HTMLDivElement>(null);
-  const turnstileWidgetIdRef = useRef<string | null>(null);
-
-  const handleTurnstileCallback = useCallback((token: string) => {
-    setTurnstileToken(token);
-  }, []);
-  const handleTurnstileExpired = useCallback(() => setTurnstileToken(null), []);
-  const handleTurnstileError = useCallback(() => setTurnstileToken(null), []);
-  const handleScriptLoad = useCallback(() => setScriptLoaded(true), []);
-
-  useEffect(() => {
-    if (!turnstileActive || !scriptLoaded) return;
-    if (turnstileWidgetIdRef.current !== null) return;
-    if (!TURNSTILE_SITE_KEY || !turnstileContainerRef.current) return;
-    if (typeof window === "undefined" || !window.turnstile) return;
-    turnstileWidgetIdRef.current = window.turnstile.render(turnstileContainerRef.current, {
-      sitekey: TURNSTILE_SITE_KEY,
-      callback: handleTurnstileCallback,
-      "expired-callback": handleTurnstileExpired,
-      "error-callback": handleTurnstileError,
-      theme: "dark",
-    });
-  }, [
-    turnstileActive,
-    scriptLoaded,
-    TURNSTILE_SITE_KEY,
-    handleTurnstileCallback,
-    handleTurnstileExpired,
-    handleTurnstileError,
-  ]);
 
   const appendLog = (lines: string[]) => {
     setLog((prev) => {
@@ -67,13 +31,6 @@ export default function RepoToPng() {
     });
   };
 
-  const resetTurnstile = useCallback(() => {
-    setTurnstileToken(null);
-    if (turnstileWidgetIdRef.current && window.turnstile) {
-      window.turnstile.reset(turnstileWidgetIdRef.current);
-    }
-  }, []);
-
   const generate = useCallback(async () => {
     if (status === "working") return;
     if (!repoUrl.trim()) {
@@ -81,7 +38,7 @@ export default function RepoToPng() {
       setStatus("error");
       return;
     }
-    if (turnstileActive && !turnstileToken) {
+    if (!turnstile.ready) {
       appendLog(["Please complete the human verification first."]);
       setStatus("error");
       return;
@@ -100,7 +57,7 @@ export default function RepoToPng() {
         body: JSON.stringify({
           url: repoUrl.trim(),
           ...(ref.trim() ? { ref: ref.trim() } : {}),
-          ...(turnstileToken ? { turnstileToken } : {}),
+          ...(turnstile.token ? { turnstileToken: turnstile.token } : {}),
         }),
       });
 
@@ -109,7 +66,7 @@ export default function RepoToPng() {
         appendLog(json.log ?? []);
         appendLog([`Error: ${json.error}`]);
         setStatus("error");
-        resetTurnstile();
+        turnstile.reset();
         return;
       }
 
@@ -124,13 +81,13 @@ export default function RepoToPng() {
       ]);
       setResult({ filename, url, projectName, repoRef });
       setStatus("done");
-      resetTurnstile();
+      turnstile.reset();
     } catch (err: unknown) {
       appendLog([`Network error: ${err instanceof Error ? err.message : String(err)}`]);
       setStatus("error");
-      resetTurnstile();
+      turnstile.reset();
     }
-  }, [status, repoUrl, ref, turnstileToken, turnstileActive, resetTurnstile, result]);
+  }, [status, repoUrl, ref, turnstile, result]);
 
   const onReset = () => {
     if (result) URL.revokeObjectURL(result.url);
@@ -140,18 +97,9 @@ export default function RepoToPng() {
   };
 
   const busy = status === "working";
-  const turnstileReady = !turnstileActive || !!turnstileToken;
 
   return (
     <div className="flex w-full max-w-3xl flex-col gap-6">
-      {turnstileActive && (
-        <Script
-          src="https://challenges.cloudflare.com/turnstile/v0/api.js"
-          strategy="afterInteractive"
-          onLoad={handleScriptLoad}
-        />
-      )}
-
       <div className="flex flex-col gap-3">
         <label className="flex flex-col gap-1">
           <span className="font-sans text-sm font-bold text-makecode-brown">
@@ -181,14 +129,12 @@ export default function RepoToPng() {
         </label>
       </div>
 
-      {turnstileActive && (
-        <div ref={turnstileContainerRef} className="min-h-[65px]" />
-      )}
+      {turnstile.widget}
 
       {status !== "done" && (
         <button
           onClick={() => void generate()}
-          disabled={busy || !turnstileReady || !repoUrl.trim()}
+          disabled={busy || !turnstile.ready || !repoUrl.trim()}
           className="rounded-lg border-4 border-makecode-black bg-makecode-cyan py-2 px-4 font-sans text-sm font-bold text-makecode-black transition-colors hover:bg-makecode-yellow disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busy ? "Generating…" : "Generate PNG"}
