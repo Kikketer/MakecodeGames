@@ -42,7 +42,7 @@ export const COMPILER_TOOLS: CompilerTool[] = [
     description:
       "For Native-flavor arcade cabinets on a 64-bit Intel/AMD Linux PC. On x86 hardware the Chromium setup (PNG to JS below) is usually the better choice — it runs games faster.",
     output: "Linux x86-64 .tar.gz (Game + libpxt.so).",
-    href: "/compilers/desktop?arch=x86-64",
+    href: "/compilers/native-x86",
     docs: NATIVE_DOCS,
   },
   {
@@ -52,7 +52,7 @@ export const COMPILER_TOOLS: CompilerTool[] = [
     description:
       "For Native-flavor arcade cabinets on a Raspberry Pi 3, Pi Zero 2 W, or similar low-powered 64-bit ARM board — including cabinets with GPIO-wired buttons. Needs a 64-bit OS.",
     output: "Linux ARM64 .tar.gz (Game + libpxt.so).",
-    href: "/compilers/desktop?arch=arm64",
+    href: "/compilers/native-arm",
     docs: NATIVE_DOCS,
   },
   {
@@ -62,7 +62,7 @@ export const COMPILER_TOOLS: CompilerTool[] = [
     description:
       "For playing or sharing a game on a regular Windows PC — just unzip and double-click. Not intended for arcade cabinets.",
     output: "Windows .zip (Game.exe + pxt.dll).",
-    href: "/compilers/desktop?arch=win64",
+    href: "/compilers/windows",
     docs: [],
   },
   {

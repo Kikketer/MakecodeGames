@@ -33,7 +33,7 @@ function NativeDocLinks() {
 export default function ArchInstructions({ arch }: ArchInstructionsProps) {
   if (arch === "arm64") {
     return (
-      <p className="mt-1 font-sans text-sm text-makecode-tan">
+      <p className="font-sans text-sm text-makecode-tan">
         Extract the downloaded .tar.gz onto a 64-bit ARM Linux board (Raspberry
         Pi 3, Pi Zero 2 W, etc.), or drop it on a USB stick for a Creation
         Station Arcade cabinet. Setup guides:{" "}
@@ -44,7 +44,7 @@ export default function ArchInstructions({ arch }: ArchInstructionsProps) {
 
   if (arch === "win64") {
     return (
-      <p className="mt-1 font-sans text-sm text-makecode-tan">
+      <p className="font-sans text-sm text-makecode-tan">
         Extract the downloaded .zip, keep Game.exe and pxt.dll in the same
         folder, then run Game.exe.
       </p>
@@ -52,7 +52,7 @@ export default function ArchInstructions({ arch }: ArchInstructionsProps) {
   }
 
   return (
-    <p className="mt-1 font-sans text-sm text-makecode-tan">
+    <p className="font-sans text-sm text-makecode-tan">
       For an x86 arcade cabinet, see the setup guides: <NativeDocLinks />.
       Otherwise extract the downloaded .tar.gz, then run ./Game in the extracted folder.
       Keep Game and libpxt.so in the same directory. On a desktop Linux system

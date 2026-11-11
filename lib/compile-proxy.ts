@@ -73,7 +73,7 @@ export function normalizeArch(raw: FormDataEntryValue | null): CompileArch {
  * Proxies a native compile request to `${INGEST_URL}/api/compile-native`.
  *
  * The Chromebook returns JSON `{ ok, base64, projectName, filename, log }`.
- * Used by the `/compilers/desktop` Server Action.
+ * Used by the native compiler Server Action (`app/compilers/_native/actions.ts`).
  */
 export async function proxyCompileNative(
   formData: FormData,

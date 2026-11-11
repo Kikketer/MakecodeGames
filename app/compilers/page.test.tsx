@@ -8,19 +8,19 @@ describe("CompilersPage", () => {
     expect(COMPILER_TOOLS.at(-1)?.id).toBe("repo-to-png");
   });
 
-  it("links each native target to the desktop compiler with its arch preselected", () => {
+  it("links each native target to its own route", () => {
     render(<CompilersPage />);
     expect(
       screen.getByRole("link", { name: "Open PNG to x86 Native" }).getAttribute("href"),
-    ).toBe("/compilers/desktop?arch=x86-64");
+    ).toBe("/compilers/native-x86");
     expect(
       screen
         .getByRole("link", { name: "Open PNG to ARM Native (Raspberry Pi 3 or less)" })
         .getAttribute("href"),
-    ).toBe("/compilers/desktop?arch=arm64");
+    ).toBe("/compilers/native-arm");
     expect(
       screen.getByRole("link", { name: "Open PNG to EXE (Windows)" }).getAttribute("href"),
-    ).toBe("/compilers/desktop?arch=win64");
+    ).toBe("/compilers/windows");
   });
 
   it("links cabinet compilers to their setup guides", () => {
