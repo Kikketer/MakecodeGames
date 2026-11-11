@@ -25,14 +25,13 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
   return bytes.buffer as ArrayBuffer;
 }
 
-export default function NativeCompiler({ initialArch = "x86-64" }: { initialArch?: Arch }) {
+export default function NativeCompiler({ arch }: { arch: Arch }) {
   const turnstileActive = useTurnstileEnabled();
   const TURNSTILE_SITE_KEY = turnstileSiteKey();
   const [status, setStatus] = useState<Status>("idle");
   const [log, setLog] = useState<string[]>([]);
   const [result, setResult] = useState<CompileResult | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [arch, setArch] = useState<Arch>(initialArch);
   const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [scriptLoaded, setScriptLoaded] = useState(false);
@@ -197,22 +196,7 @@ export default function NativeCompiler({ initialArch = "x86-64" }: { initialArch
         />
       )}
 
-      <div className="flex flex-col gap-2">
-          <label className="font-sans text-sm font-bold text-makecode-tan">
-            Target architecture
-          </label>
-          <select
-            value={arch}
-            onChange={(e) => setArch(e.target.value as Arch)}
-            disabled={busy}
-            className="rounded-lg border-4 border-makecode-black bg-white p-2 font-sans text-sm font-bold text-makecode-black focus:outline-none disabled:opacity-50"
-          >
-            <option value="x86-64">x86-64 — Linux (Intel/AMD)</option>
-            <option value="arm64">ARM64 / aarch64 — Linux (Raspberry Pi 3 or less, Pi Zero 2 W)</option>
-            <option value="win64">x86-64 — Windows</option>
-          </select>
-        <ArchInstructions arch={arch} />
-      </div>
+      <ArchInstructions arch={arch} />
 
       <div
         className={[

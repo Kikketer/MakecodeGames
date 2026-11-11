@@ -1,57 +1,17 @@
-import type { Metadata } from "next";
-import Link from "next/link";
-import NativeCompiler, { type Arch } from "./native-compiler";
+import { redirect } from "next/navigation";
 
-export const metadata: Metadata = {
-  title: "PNG → Native Executable — MakeCode Games",
-  description:
-    "Convert a MakeCode Arcade PNG export to a standalone native executable for Linux or Windows. No macOS support.",
+const ROUTES: Record<string, string> = {
+  "x86-64": "/compilers/native-x86",
+  arm64: "/compilers/native-arm",
+  win64: "/compilers/windows",
 };
-
-// Native builds on the Chromebook (4 GB RAM) can take several minutes.
-export const maxDuration = 300;
-
-const ARCHES: Arch[] = ["x86-64", "arm64", "win64"];
 
 interface Props {
   searchParams: Promise<{ arch?: string }>;
 }
 
+/** Legacy combined native compiler URL; each target now has its own route. */
 export default async function DesktopPage({ searchParams }: Props) {
   const { arch } = await searchParams;
-  const initialArch = ARCHES.find((a) => a === arch) ?? "x86-64";
-
-  return (
-    <main className="mx-auto w-full max-w-4xl flex-1 px-6 py-8">
-      <div className="flex flex-col gap-6">
-        <div>
-          <Link
-            href="/compilers"
-            className="font-sans text-sm font-bold text-makecode-cyan hover:underline"
-          >
-            ← All compilers
-          </Link>
-          <h1 className="mt-2 font-sans text-2xl font-bold text-makecode-yellow">
-            PNG → Native Executable
-          </h1>
-          <p className="mt-2 font-sans text-sm text-makecode-tan">
-            Builds a standalone native binary for{" "}
-            <span className="font-bold">Linux</span> or{" "}
-            <span className="font-bold">Windows</span>. There is{" "}
-            <span className="font-bold text-makecode-pink">no macOS support</span>{" "}
-            — these are Linux ELF and Windows PE binaries and will not run on
-            macOS. Mac users should use the{" "}
-            <Link
-              href="/compilers/png-to-js"
-              className="font-bold text-makecode-cyan hover:underline"
-            >
-              PNG → JavaScript
-            </Link>{" "}
-            compiler and run the game in a browser.
-          </p>
-        </div>
-        <NativeCompiler initialArch={initialArch} />
-      </div>
-    </main>
-  );
+  redirect((arch && ROUTES[arch]) ?? "/compilers");
 }
