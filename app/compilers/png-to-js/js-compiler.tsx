@@ -1,11 +1,8 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import Script from "next/script";
 import GamePreview from "./game-preview";
-// Loads the shared `window.turnstile` global augmentation.
-import "@/lib/turnstile-global";
-import { useTurnstileEnabled, turnstileSiteKey } from "@/lib/turnstile-client";
+import { useTurnstile } from "@/lib/use-turnstile";
 
 type Status = "idle" | "uploading" | "done" | "error";
 
@@ -22,21 +19,16 @@ interface ArcadeVersion {
 }
 
 export default function JsCompiler() {
-  const turnstileActive = useTurnstileEnabled();
-  const TURNSTILE_SITE_KEY = turnstileSiteKey();
+  const turnstile = useTurnstile();
   const [status, setStatus] = useState<Status>("idle");
   const [log, setLog] = useState<string[]>([]);
   const [result, setResult] = useState<CompileResult | null>(null);
   const [jsCode, setJsCode] = useState<string>("");
   const [showPreview, setShowPreview] = useState(false);
   const [dragOver, setDragOver] = useState(false);
-  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
-  const [scriptLoaded, setScriptLoaded] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
-  const turnstileContainerRef = useRef<HTMLDivElement>(null);
-  const turnstileWidgetIdRef = useRef<string | null>(null);
   const [arcadeVersion, setArcadeVersion] = useState<ArcadeVersion | null>(null);
 
   useEffect(() => {
@@ -48,39 +40,6 @@ export default function JsCompiler() {
       .catch(() => {});
   }, []);
 
-  const handleTurnstileCallback = useCallback((token: string) => {
-    setTurnstileToken(token);
-  }, []);
-  const handleTurnstileExpired = useCallback(() => setTurnstileToken(null), []);
-  const handleTurnstileError = useCallback(() => setTurnstileToken(null), []);
-
-  const handleScriptLoad = useCallback(() => setScriptLoaded(true), []);
-
-  useEffect(() => {
-    if (!turnstileActive || !scriptLoaded || !pendingFile) return;
-    if (turnstileWidgetIdRef.current !== null) return;
-    if (!TURNSTILE_SITE_KEY || !turnstileContainerRef.current) return;
-    if (typeof window === "undefined" || !window.turnstile) return;
-    turnstileWidgetIdRef.current = window.turnstile.render(
-      turnstileContainerRef.current,
-      {
-        sitekey: TURNSTILE_SITE_KEY,
-        callback: handleTurnstileCallback,
-        "expired-callback": handleTurnstileExpired,
-        "error-callback": handleTurnstileError,
-        theme: "dark",
-      },
-    );
-  }, [
-    turnstileActive,
-    scriptLoaded,
-    pendingFile,
-    TURNSTILE_SITE_KEY,
-    handleTurnstileCallback,
-    handleTurnstileExpired,
-    handleTurnstileError,
-  ]);
-
   const appendLog = (lines: string[]) => {
     setLog((prev) => {
       const next = [...prev, ...lines];
@@ -91,27 +50,10 @@ export default function JsCompiler() {
     });
   };
 
-  const resetTurnstile = useCallback(() => {
-    setTurnstileToken(null);
-    if (turnstileWidgetIdRef.current && window.turnstile) {
-      window.turnstile.reset(turnstileWidgetIdRef.current);
-    }
-  }, []);
-
-  const removeTurnstileWidget = useCallback(() => {
-    setTurnstileToken(null);
-    if (turnstileWidgetIdRef.current && window.turnstile) {
-      try {
-        window.turnstile.remove(turnstileWidgetIdRef.current);
-      } catch {}
-      turnstileWidgetIdRef.current = null;
-    }
-  }, []);
-
   const compile = useCallback(
     async (file: File) => {
       if (status === "uploading") return;
-      if (turnstileActive && !turnstileToken) {
+      if (!turnstile.ready) {
         appendLog(["Please complete the human verification first."]);
         setStatus("error");
         return;
@@ -124,7 +66,7 @@ export default function JsCompiler() {
 
       const form = new FormData();
       form.append("png", file);
-      if (turnstileToken) form.append("turnstileToken", turnstileToken);
+      if (turnstile.token) form.append("turnstileToken", turnstile.token);
       if (arcadeVersion) {
         form.append("simUrl", `${window.location.origin}${arcadeVersion.simUrl}`);
         form.append("cdnUrl", `${window.location.origin}${arcadeVersion.cdnUrl}`);
@@ -140,7 +82,7 @@ export default function JsCompiler() {
           appendLog(json.log ?? []);
           appendLog([`Error: ${json.error}`]);
           setStatus("error");
-          resetTurnstile();
+          turnstile.reset();
           return;
         }
 
@@ -154,14 +96,14 @@ export default function JsCompiler() {
         setResult({ filename, url });
         setJsCode(code);
         setStatus("done");
-        resetTurnstile();
+        turnstile.reset();
       } catch (err: unknown) {
         appendLog([`Network error: ${err instanceof Error ? err.message : String(err)}`]);
         setStatus("error");
-        resetTurnstile();
+        turnstile.reset();
       }
     },
-    [status, turnstileToken, turnstileActive, resetTurnstile, arcadeVersion],
+    [status, turnstile, arcadeVersion],
   );
 
   const handleFile = (file: File | null | undefined) => {
@@ -195,7 +137,6 @@ export default function JsCompiler() {
     setShowPreview(false);
     setPendingFile(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
-    removeTurnstileWidget();
   };
 
   const handlePreviewError = (message: string) => {
@@ -204,18 +145,9 @@ export default function JsCompiler() {
   };
 
   const busy = status === "uploading";
-  const turnstileReady = !turnstileActive || !!turnstileToken;
 
   return (
     <div className="flex w-full max-w-3xl flex-col gap-6">
-      {turnstileActive && (
-        <Script
-          src="https://challenges.cloudflare.com/turnstile/v0/api.js"
-          strategy="afterInteractive"
-          onLoad={handleScriptLoad}
-        />
-      )}
-
       <div
         className={[
           "cursor-pointer rounded-xl border-4 border-dashed border-makecode-black bg-makecode-white p-10 text-center transition-colors",
@@ -246,17 +178,12 @@ export default function JsCompiler() {
         />
       </div>
 
-      {turnstileActive && pendingFile && (
-        <div
-          ref={turnstileContainerRef}
-          className={status === "done" ? "hidden" : "min-h-[65px]"}
-        />
-      )}
+      {turnstile.widget}
 
-      {pendingFile && status !== "done" && (
+      {status !== "done" && (
         <button
-          onClick={() => void compile(pendingFile)}
-          disabled={busy || !turnstileReady}
+          onClick={() => pendingFile && void compile(pendingFile)}
+          disabled={busy || !pendingFile || !turnstile.ready}
           className="rounded-lg border-4 border-makecode-black bg-makecode-cyan py-2 px-4 font-sans text-sm font-bold text-makecode-black transition-colors hover:bg-makecode-yellow disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busy ? "Compiling…" : "Compile"}
