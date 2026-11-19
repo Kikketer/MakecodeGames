@@ -21,22 +21,23 @@ jobs:
             -H "CF-Access-Client-Secret: ${{ secrets.CLOUDFLARE_SECRET }}"
 
       - name: Email on failure
-        # Sends via Resend (https://resend.com). The free onboarding@resend.dev
-        # sender can only deliver to the Resend account owner's own email,
-        # which is exactly what we want here — no domain verification needed.
-        # Needs repo secret RESEND_API_KEY and repo variable NOTIFY_EMAIL.
+        # Sends via Gmail SMTP (sends as yourself, to yourself).
+        # Needs repo secrets SMTP_USERNAME (full email) and SMTP_PASSWORD
+        # (Google app password — https://myaccount.google.com/apppasswords).
         if: failure()
-        env:
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          NOTIFY_EMAIL: ${{ vars.NOTIFY_EMAIL }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          curl -sS --fail-with-body -X POST "https://api.resend.com/emails" \
-            -H "Authorization: Bearer ${RESEND_API_KEY}" \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"from\": \"MakecodeGames CI <onboarding@resend.dev>\",
-              \"to\": [\"${NOTIFY_EMAIL}\"],
-              \"subject\": \"daily-ingest failed on ${{ github.repository }}\",
-              \"text\": \"The daily-ingest workflow failed.\n\nRun: ${RUN_URL}\n\nA curl error 530 / error code 1033 means the Cloudflare tunnel to the ingest box is down (box off/asleep or cloudflared not running).\"
-            }"
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "daily-ingest failed on ${{ github.repository }}"
+          to: ${{ secrets.SMTP_USERNAME }}
+          from: "MakecodeGames CI <${{ secrets.SMTP_USERNAME }}>"
+          body: |
+            The daily-ingest workflow failed.
+
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            A curl error 530 / error code 1033 means the Cloudflare tunnel
+            to the ingest box is down (box off/asleep or cloudflared not running).
