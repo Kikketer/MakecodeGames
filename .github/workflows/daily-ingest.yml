@@ -21,23 +21,20 @@ jobs:
             -H "CF-Access-Client-Secret: ${{ secrets.CLOUDFLARE_SECRET }}"
 
       - name: Email on failure
-        # Sends via Gmail SMTP (sends as yourself, to yourself).
+        # Sends via Gmail SMTP using curl's built-in SMTPS support (no
+        # third-party action; sends as yourself, to yourself).
         # Needs repo secrets SMTP_USERNAME (full email) and SMTP_PASSWORD
         # (Google app password — https://myaccount.google.com/apppasswords).
         if: failure()
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: smtp.gmail.com
-          server_port: 465
-          username: ${{ secrets.SMTP_USERNAME }}
-          password: ${{ secrets.SMTP_PASSWORD }}
-          subject: "daily-ingest failed on ${{ github.repository }}"
-          to: ${{ secrets.SMTP_USERNAME }}
-          from: "MakecodeGames CI <${{ secrets.SMTP_USERNAME }}>"
-          body: |
-            The daily-ingest workflow failed.
-
-            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-            A curl error 530 / error code 1033 means the Cloudflare tunnel
-            to the ingest box is down (box off/asleep or cloudflared not running).
+        env:
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          printf 'From: MakecodeGames CI <%s>\nTo: %s\nSubject: daily-ingest failed on %s\n\nThe daily-ingest workflow failed.\n\nRun: %s\n\nA curl error 530 / error code 1033 means the Cloudflare tunnel to the ingest box is down (box off/asleep or cloudflared not running).\n' \
+            "$SMTP_USERNAME" "$SMTP_USERNAME" "${{ github.repository }}" "$RUN_URL" > "$RUNNER_TEMP/mail.txt"
+          curl -sS --fail-with-body "smtps://smtp.gmail.com:465" \
+            --user "${SMTP_USERNAME}:${SMTP_PASSWORD}" \
+            --mail-from "$SMTP_USERNAME" \
+            --mail-rcpt "$SMTP_USERNAME" \
+            --upload-file "$RUNNER_TEMP/mail.txt"
