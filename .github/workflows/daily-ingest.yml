@@ -21,10 +21,10 @@ jobs:
             -H "CF-Access-Client-Secret: ${{ secrets.CLOUDFLARE_SECRET }}"
 
       - name: Email on failure
-        # Sends via Gmail SMTP using curl's built-in SMTPS support (no
-        # third-party action). Needs repo secrets SMTP_USERNAME (full Google
-        # Workspace/Gmail address) and SMTP_PASSWORD (app password —
-        # https://myaccount.google.com/apppasswords). NOTIFY_EMAIL is the
+        # Sends via iCloud SMTP using curl's built-in STARTTLS support (no
+        # third-party action). Needs repo secrets SMTP_USERNAME (full
+        # @icloud/@me/@mac address) and SMTP_PASSWORD (app-specific password —
+        # appleid.apple.com > Sign-In and Security). NOTIFY_EMAIL is the
         # recipient; defaults to sending to the sender itself.
         if: failure()
         env:
@@ -35,7 +35,8 @@ jobs:
         run: |
           printf 'From: MakecodeGames CI <%s>\nTo: %s\nSubject: daily-ingest failed on %s\n\nThe daily-ingest workflow failed.\n\nRun: %s\n\nA curl error 530 / error code 1033 means the Cloudflare tunnel to the ingest box is down (box off/asleep or cloudflared not running).\n' \
             "$SMTP_USERNAME" "$NOTIFY_EMAIL" "${{ github.repository }}" "$RUN_URL" > "$RUNNER_TEMP/mail.txt"
-          curl -sS --fail-with-body "smtps://smtp.gmail.com:465" \
+          curl -sS --fail-with-body "smtp://smtp.mail.me.com:587" \
+            --ssl-reqd \
             --user "${SMTP_USERNAME}:${SMTP_PASSWORD}" \
             --mail-from "$SMTP_USERNAME" \
             --mail-rcpt "$NOTIFY_EMAIL" \
