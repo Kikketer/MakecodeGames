@@ -19,3 +19,24 @@ jobs:
             -H "Authorization: Bearer ${{ secrets.INGEST_SECRET }}" \
             -H "CF-Access-Client-Id: ${{ vars.CLOUDFLARE_CLIENT }}" \
             -H "CF-Access-Client-Secret: ${{ secrets.CLOUDFLARE_SECRET }}"
+
+      - name: Email on failure
+        # Sends via Resend (https://resend.com). The free onboarding@resend.dev
+        # sender can only deliver to the Resend account owner's own email,
+        # which is exactly what we want here — no domain verification needed.
+        # Needs repo secret RESEND_API_KEY and repo variable NOTIFY_EMAIL.
+        if: failure()
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          NOTIFY_EMAIL: ${{ vars.NOTIFY_EMAIL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          curl -sS --fail-with-body -X POST "https://api.resend.com/emails" \
+            -H "Authorization: Bearer ${RESEND_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"from\": \"MakecodeGames CI <onboarding@resend.dev>\",
+              \"to\": [\"${NOTIFY_EMAIL}\"],
+              \"subject\": \"daily-ingest failed on ${{ github.repository }}\",
+              \"text\": \"The daily-ingest workflow failed.\n\nRun: ${RUN_URL}\n\nA curl error 530 / error code 1033 means the Cloudflare tunnel to the ingest box is down (box off/asleep or cloudflared not running).\"
+            }"
